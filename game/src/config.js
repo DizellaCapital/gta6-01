@@ -33,6 +33,31 @@ export const CAR = {
 
 export const WANTED_MAX = 5;
 
+// Helipad (civil heli spawns here) and Rico's garage (repair + repaint).
+export const HELIPAD = { x: 2800, y: 350 };
+export const GARAGE = { x: 1000, y: 1850, r: 100 };
+export const GARAGE_REPAIR_COST = 50;
+// Free street-race start (repeatable sprint, G to join).
+export const RACE_START = { x: 2200, y: 850 };
+
+export const HELI = {
+  length: 64,
+  width: 30,
+  maxSpeed: 520,
+  accel: 300,
+  climb: 130, // altitude units per second (0..300)
+  maxAlt: 300,
+  turn: 2.2,
+};
+
+// Original Solmar Bay car models — no real makes or Rockstar names.
+export const CAR_NAMES = [
+  'Comet GT', 'Bay Runner', 'Solmar Cruiser', 'Palm Coupe', 'Harbor Hauler',
+  'Marina GT', 'Sunset Sedan', 'Coral Cab', 'Tide Van', 'Reef Roadster',
+];
+export const HELI_NAME = 'Skyhawk-9';
+export const POLICE_HELI_NAME = 'SBPD Air-1';
+
 export const PALETTE = {
   backdrop: '#0e1a24',
   grass: '#7fae62',

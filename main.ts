@@ -4,10 +4,13 @@
 // (game/index.html and its ES modules, no library and no network request), and the program hands
 // it in. It copies game/ and screenshots/ from beside this file to /output and writes
 // /output/dossier.json, the summary the judge reads, with the vendored make.fun library.
-// Solmar Bay: a sun-soaked modern city (Solmar City) you explore on foot and by car — traffic,
-// pedestrians, car theft, a 1-5 star wanted system with police chases, 5 story missions for
-// Mara Voss, combat, a HUD with a live minimap, start/pause/game-over, localStorage saves and
-// synthesized WebAudio sound. No Rockstar names, characters, maps or assets anywhere.
+// Solmar Bay: a sun-soaked modern city (Solmar City) you explore on foot, by car and by
+// helicopter — traffic, pedestrians, car theft, a 1-5 star wanted system with SBPD dispatch
+// (named units, roadblocks, police helicopter with spotlight), 8 story missions for Mara
+// Voss, street races, a garage, a 3-person crew with abilities, in-game radio with 4
+// stations, weapon slots, armor, districts with standing, rank/RP, a dense HUD with a
+// circular minimap, start/pause/game-over, localStorage saves and synthesized WebAudio
+// sound. No Rockstar names, characters, maps or assets anywhere.
 
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.

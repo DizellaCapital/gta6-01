@@ -6,6 +6,10 @@ import { nearestRoadPoint, onRoad } from './city.js';
 
 const CAR_COLORS = ['#c0392b', '#2980b9', '#f1c40f', '#ecf0f1', '#2c3e50', '#e67e22', '#16a085', '#9b59b6', '#7f8c8d', '#d35400'];
 const PARKED_COLORS = ['#c0392b', '#2980b9', '#f1c40f', '#ecf0f1', '#16a085', '#e67e22'];
+const CAR_NAMES = [
+  'Comet GT', 'Bay Runner', 'Solmar Cruiser', 'Palm Coupe', 'Harbor Hauler',
+  'Marina GT', 'Sunset Sedan', 'Coral Cab', 'Tide Van', 'Reef Roadster',
+];
 
 let nextCarId = 1;
 
@@ -15,7 +19,17 @@ export function makeCar(x, y, angle, color, kind) {
     dir: 0, // 0:+x 1:+y 2:-x 3:-y along a road
     targetSpeed: 130, length: CAR.length, width: CAR.width,
     driver: kind === 'traffic', stolen: false, id: nextCarId++, ramCd: 0,
+    name: kind === 'police' ? 'SBPD Interceptor'
+      : kind === 'courier' ? 'Ghost Courier'
+      : CAR_NAMES[Math.floor(Math.random() * CAR_NAMES.length)],
+    condition: 100, plate: `SB-${1000 + Math.floor(Math.random() * 9000)}`,
   };
+}
+
+/** Give a car a fresh original plate (Tito's clean-plates job). */
+export function freshPlate(car) {
+  car.plate = `SB-${1000 + Math.floor(Math.random() * 9000)}`;
+  return car.plate;
 }
 
 export function spawnTraffic(random, city, playerPos, count) {

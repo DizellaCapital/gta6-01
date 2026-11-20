@@ -6,14 +6,18 @@
 // &seed=N) stages that scene instead of running the loop, paints it
 // twice and sets window.__shotReady for a screenshot.
 //
-// Controls: WASD/arrows walk & drive, E enter/exit a car, Space punch
-// (on foot) / brake (in a car), X or click shoot, P pause, M mute.
+// Controls: WASD/arrows walk & drive, E enter/exit a car or the heli,
+// Space punch (on foot) / brake (in a car) / climb (in the heli),
+// C descend (heli), X or click shoot, Q switch weapon, R radio,
+// G garage / street race, 1/2/3 crew abilities, P pause, M mute.
 import { SAVE_KEY, STEP } from './config.js';
 import { createRandom } from './random.js';
 import { createWorld, EVENT_OVER } from './world.js';
 import {
   ACTION_CONFIRM, ACTION_ENTER, ACTION_LOAD, ACTION_MUTE, ACTION_PAUSE,
-  ACTION_PUNCH, ACTION_SHOOT, createInput,
+  ACTION_PUNCH, ACTION_SHOOT, ACTION_RADIO, ACTION_WEAPON,
+  ACTION_CREW1, ACTION_CREW2, ACTION_CREW3, ACTION_GARAGE,
+  createInput,
 } from './input.js';
 import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 import { createAudio } from './audio.js';
@@ -47,7 +51,9 @@ function writeSave() {
   try {
     const s = world.state;
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-      money: s.money, health: s.health, ammo: s.ammo,
+      money: s.money, health: s.health, armor: s.armor, rp: s.rp,
+      ammo: s.weapons.list[1].ammo, smgAmmo: s.weapons.list[2].ammo,
+      radioStation: s.radio.station,
       missionsDone: s.missions.done, missionIndex: s.missions.index,
       x: s.player.x, y: s.player.y, dayTime: s.dayTime,
     }));
@@ -58,7 +64,11 @@ function applySave(save) {
   const s = world.state;
   s.money = save.money ?? s.money;
   s.health = save.health ?? s.health;
-  s.ammo = save.ammo ?? s.ammo;
+  s.armor = save.armor ?? s.armor;
+  s.rp = save.rp ?? s.rp;
+  if (save.ammo !== undefined) s.weapons.list[1].ammo = save.ammo;
+  if (save.smgAmmo !== undefined) s.weapons.list[2].ammo = save.smgAmmo;
+  if (save.radioStation !== undefined) s.radio.station = save.radioStation;
   s.missions.done = save.missionsDone || [];
   s.missions.index = save.missionIndex || 0;
   if (save.x !== undefined) { s.player.x = save.x; s.player.y = save.y; }
@@ -84,6 +94,7 @@ function runGame() {
   let accumulator = 0;
   let last = performance.now();
   let lastMissionCount = 0;
+  let lastRadioStation = 0;
 
   function announce(message) {
     status.textContent = message;
@@ -101,6 +112,7 @@ function runGame() {
       world.reset();
     }
     lastMissionCount = world.state.missions.done.length;
+    lastRadioStation = world.state.radio.station;
     accumulator = 0;
     screen = SCREEN_PLAY;
     audio.unlock();
@@ -110,6 +122,7 @@ function runGame() {
   function endGame() {
     screen = SCREEN_OVER;
     audio.setSiren(false);
+    audio.setRadio(false, 0, false);
     announce(world.state.overReason === 'busted' ? 'Busted.' : 'Wasted.');
   }
 
@@ -150,6 +163,9 @@ function runGame() {
           (mouse.x / (canvas.getBoundingClientRect().width || 1)) * 1280 - 640,
         )
         : undefined;
+      const crew = actions & ACTION_CREW1 ? 'tito'
+        : actions & ACTION_CREW2 ? 'lena'
+        : actions & ACTION_CREW3 ? 'mara' : null;
       while (accumulator >= STEP) {
         const result = world.step(STEP, {
           x: vec.x, y: vec.y,
@@ -159,10 +175,16 @@ function runGame() {
           brake: Boolean(actions & ACTION_PUNCH),
           aimAngle: aim,
           run: true,
+          radio: Boolean(actions & ACTION_RADIO),
+          weapon: Boolean(actions & ACTION_WEAPON),
+          crew,
+          garage: Boolean(actions & ACTION_GARAGE),
+          climb: input.heldClimb(),
+          descend: input.heldDescend(),
         });
         accumulator -= STEP;
         // One-shot flags are consumed by the first step only.
-        actions &= ~(ACTION_ENTER | ACTION_PUNCH | ACTION_SHOOT);
+        actions &= ~(ACTION_ENTER | ACTION_PUNCH | ACTION_SHOOT | ACTION_RADIO | ACTION_WEAPON | ACTION_CREW1 | ACTION_CREW2 | ACTION_CREW3 | ACTION_GARAGE);
         if (result.events & EVENT_OVER) { endGame(); break; }
         if (world.state.missions.done.length > lastMissionCount) {
           lastMissionCount = world.state.missions.done.length;
@@ -174,10 +196,16 @@ function runGame() {
       const s = world.state;
       audio.engine(s.engineSpeed || 0, !s.player.onFoot);
       audio.setSiren(s.wanted >= 2);
+      if (s.radio.station !== lastRadioStation) {
+        lastRadioStation = s.radio.station;
+        audio.radioJingle(s.radio.station);
+      }
+      audio.setRadio(s.radio.on, s.radio.station, !s.player.onFoot);
     } else {
       accumulator = 0;
       audio.engine(0, false);
       audio.setSiren(false);
+      audio.setRadio(false, 0, false);
     }
     renderer.draw(world.state, screen, { hasSave: Boolean(save) });
   }

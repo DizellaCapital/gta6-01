@@ -3,13 +3,19 @@
 // steered by a simple autopilot that drives along the road grid toward
 // the mission marker, so the frame is what real play looks like and the
 // same seed always gives the same frame.
+// chase is the money shot: wanted 4, SBPD Air-1 overhead with its
+// spotlight on the player, a roadblock ahead, dispatch live, radio on,
+// mission JOB 1/8 running.
 import { ROADS_H, ROADS_V, STEP } from './config.js';
 import { pointInBuilding, nearestRoadPoint } from './city.js';
+import { spawnRoadblock } from './police.js';
+import { nextStation } from './radio.js';
 import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 
 const START_SECONDS = 5;
 const PLAY_SECONDS = 34;
-const CHASE_SECONDS = 8;
+const CHASE_DRIVE_SECONDS = 12;
+const CHASE_SECONDS = 9;
 const END_SECONDS = 24;
 
 function nearest(list, v) {
@@ -109,8 +115,9 @@ function autopilot(state) {
 /**
  * Set `world` to the named scene and return the screen to draw over it.
  * start: title over a living city. play: driving to the first job,
- * wanted 1. chase: wanted 4, police on the tail, mission live.
- * end: busted/wasted panel over a police surround (any other name: start).
+ * wanted 1. chase: wanted 4, police heli + spotlight + roadblock,
+ * dispatch live, radio on, mission live. end: busted/wasted panel
+ * over a police surround (any other name: start).
  */
 export function stageShot(name, world) {
   world.reset();
@@ -154,19 +161,38 @@ export function stageShot(name, world) {
     return { screen: state.over ? SCREEN_OVER : SCREEN_PLAY, info: { hasSave: false } };
   }
   if (name === 'chase') {
+    // Radio on (Reef Radio) + armor, so the HUD shows both.
+    nextStation(state.radio);
+    state.armor = 60;
     // Get moving on the road first, then bring the heat: the frame
     // catches the pursuit mid-chase instead of a pile-up.
-    for (let i = 0; i < 6 / STEP; i += 1) {
+    for (let i = 0; i < CHASE_DRIVE_SECONDS / STEP; i += 1) {
       world.step(STEP, autopilot(state));
       if (state.over) break;
     }
     world.addWanted(4);
+    // Guarantee the air unit + a roadblock are in the frame, then let
+    // the real rules run so the spotlight locks on.
+    spawnRoadblock(state, state.random);
     for (let i = 0; i < CHASE_SECONDS / STEP; i += 1) {
       world.step(STEP, autopilot(state));
       if (state.over) break;
     }
     // Make sure police are visibly close for the shot.
     if (state.policeCars.length === 0) world.spawnPoliceCar();
+    if (!state.policeHeli) world.addWanted(4);
+    // Stage the air unit clearly inside the frame (up-left of the player),
+    // spotlight locked on — still the real heli state, just positioned.
+    if (state.policeHeli) {
+      state.policeHeli.x = state.player.x - 200;
+      state.policeHeli.y = state.player.y - 140;
+      state.policeHeli.spotlight = 1;
+    }
+    // Dialogue + dispatch need to be legible in the still.
+    world.sayDialog('Mara Voss', 'Air-1 has you in the light, Rico — lose them before the roadblock!', 10);
+    if (state.dialog) state.dialogTimer = 10;
+    state.message = 'SBPD Air-1 overhead — lose the spotlight!';
+    state.messageTimer = 10;
     return { screen: SCREEN_PLAY, info: { hasSave: false } };
   }
   // end: high heat, low health, police closing in until busted/wasted.

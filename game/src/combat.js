@@ -1,5 +1,29 @@
-// Combat: fists, a pistol with ammo, bullets, and pickups
-// (cash, health, ammo) scattered around Solmar Bay.
+// Combat: fists, a pistol, an SMG, bullets, and pickups (cash, health,
+// armor, ammo) scattered around Solmar Bay. Weapons live on the player:
+// Q cycles them, each with its own ammo pool.
+export const WEAPONS = [
+  { id: 'fists', name: 'FISTS', ammo: Infinity, damage: 18, rate: 0.45 },
+  { id: 'pistol', name: 'PISTOL', ammo: 24, damage: 34, rate: 0.32 },
+  { id: 'smg', name: 'SMG', ammo: 60, damage: 16, rate: 0.11 },
+];
+
+export function createWeapons() {
+  return {
+    list: WEAPONS.map((w) => ({ ...w })),
+    index: 0,
+    cooldown: 0,
+  };
+}
+
+export function currentWeapon(weapons) {
+  return weapons.list[weapons.index];
+}
+
+export function cycleWeapon(weapons) {
+  weapons.index = (weapons.index + 1) % weapons.list.length;
+  return currentWeapon(weapons);
+}
+
 export function makeBullet(x, y, angle, from) {
   return { x, y, vx: Math.cos(angle) * 720, vy: Math.sin(angle) * 720, life: 0.9, from };
 }
@@ -14,7 +38,7 @@ export function updateBullets(state, dt) {
 }
 
 export function spawnPickups(random, count) {
-  const kinds = ['cash', 'health', 'ammo'];
+  const kinds = ['cash', 'health', 'armor', 'ammo'];
   const pickups = [];
   for (let i = 0; i < count; i += 1) {
     pickups.push({
