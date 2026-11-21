@@ -1,133 +1,159 @@
-// Solmar Bay — the story. Eight jobs for Mara Voss, in order. Each job has
-// a briefing, a chain of stages (drive somewhere, pick something up, escape,
-// deliver), a timer where the job is timed, and a cash reward. The world
-// module advances stages when Rico reaches a stage target.
+// Mara Voss's story: eight jobs in order. Each job is a list of stages with
+// a place to reach (or checkpoints to clear) and an optional timer; finishing
+// a job pays cash, raises rank points and lifts district standing.
+import { CFG } from './config.js';
+
 export const MISSIONS = [
   {
     name: 'Solmar Bay Taxi',
-    briefing: 'Mara Voss: "Rico, drive my cousin from the marina to Old Town. No scratches, no cops. Easy money."',
+    giver: 'Mara Voss',
     reward: 400,
+    intro: 'Mara: "Rico, my cousin just landed at the marina. Pick her up and take her to the Palm Court hotel. No dents."',
     stages: [
-      { text: 'Pick up Mara\'s cousin at the marina', target: { x: 400, y: 400 }, radius: 90 },
-      { text: 'Drop him off in Old Town', target: { x: 2000, y: 400 }, radius: 90 },
+      { text: 'Pick up Mara\'s cousin at the marina', at: { x: 130, y: CFG.worldHeight - 130 }, r: 90 },
+      { text: 'Drop her at the Palm Court hotel', at: { x: 1400, y: 500 }, r: 90 },
     ],
   },
   {
-    name: 'Dockside Pickup',
-    briefing: 'Mara Voss: "A crate came in at Dockside. Grab it before the harbour crew clocks it. Bring it to the garage."',
-    reward: 650,
+    name: 'Bayfront Delivery',
+    giver: 'Mara Voss',
+    reward: 550,
+    intro: 'Mara: "Two parcels, two doors. First the docks office, then the Civic Hill gallery. Keep it quiet."',
     stages: [
-      { text: 'Collect the crate at Dockside', target: { x: 400, y: 1600 }, radius: 90 },
-      { text: 'Deliver the crate to the garage', target: { x: 2000, y: 2000 }, radius: 110 },
+      { text: 'Deliver the parcel to the docks office', at: { x: 600, y: CFG.worldHeight - 500 }, r: 90 },
+      { text: 'Deliver the parcel to the Civic Hill gallery', at: { x: 2100, y: 600 }, r: 90 },
     ],
   },
   {
-    name: 'Sunset Grand Prix',
-    briefing: 'Mara Voss: "Street race tonight, Beachfront to the Hills. Beat the clock and the whole town talks about you."',
+    name: 'Sunset Sprint',
+    giver: 'Mara Voss',
+    reward: 700,
+    intro: 'Mara: "Street race, five gates, ninety seconds. Win it and the Strip talks about us. Lose it and we walk."',
+    timer: 90,
+    stages: [
+      { text: 'Race gate 1/5 — Sunset Strip', at: { x: 600, y: 1100 }, r: 100 },
+      { text: 'Race gate 2/5 — Palm Court', at: { x: 1200, y: 1100 }, r: 100 },
+      { text: 'Race gate 3/5 — Old Town', at: { x: 1200, y: 500 }, r: 100 },
+      { text: 'Race gate 4/5 — Civic Hill', at: { x: 2200, y: 500 }, r: 100 },
+      { text: 'Race gate 5/5 — finish line', at: { x: 2200, y: 1500 }, r: 100 },
+    ],
+  },
+  {
+    name: 'Harbor Heist Setup',
+    giver: 'Mara Voss',
+    reward: 800,
+    intro: 'Mara: "We need a clean ride. Lift the Kestrel parked by the marina, then bring it to our garage. No police."',
+    stages: [
+      { text: 'Steal the Kestrel by the marina', at: { x: 340, y: CFG.worldHeight - 80 }, r: 110 },
+      { text: 'Deliver it to the crew garage', at: { x: 295, y: CFG.worldHeight - 100 }, r: 120 },
+    ],
+  },
+  {
+    name: 'Docks Deal',
+    giver: 'Mara Voss',
     reward: 900,
-    timer: 150,
+    intro: 'Mara: "Meet my contact at the docks. The SBPD will be sniffing around — if they spot you, run."',
     stages: [
-      { text: 'Race checkpoint 1 — Beachfront', target: { x: 800, y: 2800 }, radius: 110 },
-      { text: 'Race checkpoint 2 — Downtown', target: { x: 2000, y: 2000 }, radius: 110 },
-      { text: 'Race checkpoint 3 — Solmar Hills finish', target: { x: 3600, y: 1600 }, radius: 110 },
+      { text: 'Meet the contact at the docks', at: { x: 400, y: CFG.worldHeight - 700 }, r: 90 },
+      { text: 'Lose the heat — get 600m from any unit', at: { x: 2400, y: 300 }, r: 120 },
     ],
   },
   {
-    name: 'Getaway Driver',
-    briefing: 'Mara Voss: "My crew hit a snag in Downtown. Pick them up and lose the SBPD. Do not get busted."',
-    reward: 1200,
+    name: 'Skyline Run',
+    giver: 'Mara Voss',
+    reward: 1100,
+    intro: 'Mara: "Three drops across the city, two minutes. The heli pad is yours if you need the sky. Make it count."',
+    timer: 120,
     stages: [
-      { text: 'Pick up the crew in Downtown', target: { x: 2400, y: 1600 }, radius: 90 },
-      { text: 'Lose the cops and reach the safehouse', target: { x: 800, y: 2800 }, radius: 110 },
-    ],
-  },
-  {
-    name: 'Rooftop Lift',
-    briefing: 'Mara Voss: "The heli is fuelled on the pad. Fly to the Downtown tower, pick up the package, and land it at the marina."',
-    reward: 1500,
-    stages: [
-      { text: 'Take the helicopter from the helipad', target: { x: 3600, y: 2800 }, radius: 120 },
-      { text: 'Pick up the package on the Downtown tower', target: { x: 2400, y: 1600 }, radius: 110 },
-      { text: 'Land the package at the marina', target: { x: 400, y: 400 }, radius: 120 },
-    ],
-  },
-  {
-    name: 'Two Hot Cars',
-    briefing: 'Mara Voss: "I need two clean rides for a buyer. Steal a Comet and a Marlin and park them in the garage."',
-    reward: 1800,
-    stages: [
-      { text: 'Steal a Comet and bring it to the garage', target: { x: 2000, y: 2000 }, radius: 110 },
-      { text: 'Steal a Marlin and bring it to the garage', target: { x: 2000, y: 2000 }, radius: 110 },
+      { text: 'Drop 1/3 — Northgate', at: { x: 2800, y: 300 }, r: 100 },
+      { text: 'Drop 2/3 — Bayfront', at: { x: 2800, y: 1700 }, r: 100 },
+      { text: 'Drop 3/3 — Marina Row', at: { x: 400, y: 1700 }, r: 100 },
     ],
   },
   {
     name: 'The Big Score',
-    briefing: 'Mara Voss: "Tonight we take the Palm Heights vault. Grab the cash, then run — the whole SBPD will be on you."',
-    reward: 3500,
+    giver: 'Mara Voss',
+    reward: 1500,
+    intro: 'Mara: "The Civic bank, Rico. In and out. The whole city will be looking for us after this — be ready."',
     stages: [
-      { text: 'Hit the Palm Heights vault', target: { x: 4000, y: 800 }, radius: 100 },
-      { text: 'Escape the SBPD and reach the safehouse', target: { x: 800, y: 2800 }, radius: 110 },
+      { text: 'Reach the Civic bank', at: { x: 2100, y: 800 }, r: 100 },
+      { text: 'Escape to the marina safehouse', at: { x: 200, y: CFG.worldHeight - 200 }, r: 120 },
     ],
   },
   {
-    name: 'King of Solmar Bay',
-    briefing: 'Mara Voss: "Last one, Rico. One final race across the whole city, then you are a legend. Make it count."',
-    reward: 5000,
-    timer: 210,
+    name: 'Solmar Bay Finale',
+    giver: 'Mara Voss',
+    reward: 2500,
+    intro: 'Mara: "Last one. Deliver the case to me at the helipad and we are free. Everything we built rides on this drive."',
     stages: [
-      { text: 'Final race — checkpoint 1, Marina Row', target: { x: 800, y: 400 }, radius: 110 },
-      { text: 'Final race — checkpoint 2, Dockside', target: { x: 800, y: 2000 }, radius: 110 },
-      { text: 'Final race — checkpoint 3, Airport Flats', target: { x: 3600, y: 2800 }, radius: 110 },
-      { text: 'Final race — finish at Palm Heights', target: { x: 4000, y: 800 }, radius: 120 },
+      { text: 'Pick up the case at Old Town', at: { x: 800, y: 900 }, r: 100 },
+      { text: 'Deliver the case to Mara at the helipad', at: { x: CFG.worldWidth - 100, y: 100 }, r: 110 },
     ],
   },
 ];
 
-export function currentMission(state) {
-  return MISSIONS[state.missionIndex] || null;
+export function currentMission(S) {
+  return MISSIONS[S.missionIdx] || null;
 }
 
-export function currentStage(state) {
-  const m = currentMission(state);
-  return m ? m.stages[state.missionStage] : null;
+export function currentStage(S) {
+  const m = currentMission(S);
+  if (!m) return null;
+  return m.stages[S.missionStage] || null;
 }
 
-// Advance the active job when Rico reaches the stage target. Returns a
-// message for the HUD when something happens, or null.
-export function updateMissions(state, dt) {
-  const m = currentMission(state);
-  if (!m || state.screen !== 'play') return null;
+export function startMission(S, idx) {
+  const m = MISSIONS[idx];
+  if (!m) return;
+  S.missionIdx = idx;
+  S.missionStage = 0;
+  S.missionTimer = m.timer || 0;
+  S.missionState = 'active';
+  S.dialog = { name: m.giver, text: m.intro, until: S.time + 7 };
+  S.messages.push(`JOB ${idx + 1}/8 — ${m.name}`);
+}
+
+export function updateMissions(S, dt) {
+  const m = currentMission(S);
+  if (!m || S.missionState !== 'active') return;
   if (m.timer) {
-    state.missionTimer -= dt;
-    if (state.missionTimer <= 0) {
-      state.missionTimer = m.timer;
-      state.missionStage = 0;
-      return 'Time up — the job resets. Try again, Rico.';
+    S.missionTimer -= dt;
+    if (S.missionTimer <= 0) {
+      S.missionState = 'failed';
+      S.messages.push(`JOB FAILED — ${m.name}. Talk to Mara to retry.`);
+      S.missionTimer = 0;
+      return;
     }
   }
-  const stage = currentStage(state);
-  if (!stage) return null;
-  const dx = state.player.x - stage.target.x;
-  const dy = state.player.y - stage.target.y;
-  if (Math.hypot(dx, dy) < stage.radius) {
-    state.missionStage++;
-    if (state.missionStage >= m.stages.length) {
-      state.player.money += m.reward;
-      state.player.rp += 250;
-      state.stats.missionsDone++;
-      state.missionIndex++;
-      state.missionStage = 0;
-      const next = currentMission(state);
-      state.missionTimer = next && next.timer ? next.timer : 0;
-      state.dialog = { speaker: 'Mara Voss', text: next ? `Job done. $${m.reward} is yours. Next: ${next.name}.` : 'That is every job, Rico. Solmar Bay is yours now.', timer: 6 };
-      return `Job complete: ${m.name} — $${m.reward}`;
+  const stage = currentStage(S);
+  if (!stage) return;
+  const d = Math.hypot(S.player.x - stage.at.x, S.player.y - stage.at.y);
+  if (d <= stage.r) {
+    S.missionStage++;
+    S.sound?.pickup();
+    if (S.missionStage >= m.stages.length) {
+      S.player.money += m.reward;
+      S.player.rp += 120;
+      S.player.rank = rankFor(S.player.rp);
+      S.missionState = 'done';
+      S.messages.push(`JOB DONE — ${m.name} +$${m.reward}`);
+      S.dialog = { name: m.giver, text: `Mara: "Clean work, Rico. $${m.reward} is yours. Next job when you're ready."`, until: S.time + 6 };
+      if (S.missionIdx + 1 < MISSIONS.length) {
+        startMission(S, S.missionIdx + 1);
+      } else {
+        S.screen = 'end';
+        S.endKind = 'win';
+      }
+    } else {
+      S.messages.push(`Stage ${S.missionStage + 1}/${m.stages.length}`);
     }
-    return `Stage done — ${currentStage(state).text}`;
   }
-  return null;
 }
 
-export function startMissionTimer(state) {
-  const m = currentMission(state);
-  state.missionTimer = m && m.timer ? m.timer : 0;
+export function rankFor(rp) {
+  if (rp >= 900) return 'Kingpin';
+  if (rp >= 600) return 'Fixer';
+  if (rp >= 350) return 'Wheelman';
+  if (rp >= 150) return 'Runner';
+  return 'Rookie';
 }

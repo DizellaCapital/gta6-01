@@ -1,116 +1,179 @@
-// Solmar Bay — boot. Reads the URL (?shot=start|play|chase|end&seed=1),
-// builds the world, stages screenshot scenes by running the real
-// simulation forward, then runs the fixed-step loop and draws every frame.
-// The canvas is always locked to the full window, including devicePixelRatio.
-import { CONFIG } from './config.js';
-import { createWorld, stepWorld, loadGame, saveGame, missionBriefing } from './world.js';
-import { createInput, attachInput, consumePress, clearPresses } from './input.js';
+// Solmar Bay boot: read the URL, build the world, run the fixed-step loop,
+// wire input to the simulation, and run the screen state machine
+// (title / play / pause / end). With ?shot=start|play|chase|end the game
+// stages that scene deterministically instead of waiting for a player.
+import { CFG } from './config.js';
+import { createWorld, stepWorld, saveGame, loadSave, applySave } from './world.js';
+import { Input } from './input.js';
+import { SoundBoard } from './audio.js';
 import { render } from './render.js';
-import { createAudio } from './audio.js';
-import { stageShot, autopilot } from './shots.js';
+import { stageScene } from './shots.js';
+import { switchWeapon, fireWeapon, aimAngle } from './combat.js';
+import { callCrew } from './crew.js';
+import { nextStationId, stationById } from './radio.js';
+import { startMission, currentMission } from './missions.js';
 
-const canvas = document.getElementById('game');
-const statusEl = document.getElementById('status');
+const canvas = document.querySelector('#game');
+const statusEl = document.querySelector('#status');
 const ctx = canvas.getContext('2d');
-
-let viewW = 1280;
-let viewH = 720;
-
-function resize() {
-  const dpr = window.devicePixelRatio || 1;
-  viewW = window.innerWidth;
-  viewH = window.innerHeight;
-  canvas.width = Math.round(viewW * dpr);
-  canvas.height = Math.round(viewH * dpr);
-  canvas.style.width = viewW + 'px';
-  canvas.style.height = viewH + 'px';
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  if (window.__solmar) {
-    window.__solmar.viewW = viewW;
-    window.__solmar.viewH = viewH;
-  }
-}
-window.addEventListener('resize', resize);
-resize();
-
 const params = new URLSearchParams(window.location.search);
-const seed = parseInt(params.get('seed') || '1', 10) || 1;
-const shot = params.get('shot') || '';
+const seedParam = Number(params.get('seed'));
+const seed = Number.isFinite(seedParam) && seedParam > 0 ? Math.floor(seedParam) : 20261121;
+const shot = params.get('shot');
 
-const input = createInput();
-attachInput(input, canvas);
-const audio = createAudio();
-const state = createWorld(seed);
-state.input = input;
-state.audio = audio;
-state.viewW = viewW;
-state.viewH = viewH;
-state.saveLoaded = loadGame(state);
-window.__solmar = state;
+const sound = new SoundBoard();
+const input = new Input(canvas);
 
-if (shot) {
-  const seconds = shot === 'start' ? 6 : shot === 'end' ? 0 : 9;
-  stageShot(state, shot, seconds);
-} else {
-  state.camera.x = Math.max(0, state.player.x - viewW / 2);
-  state.camera.y = Math.max(0, state.player.y - viewH / 2);
+function fitCanvas() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { w, h };
 }
 
-let last = performance.now();
-let acc = 0;
-
-function frame(now) {
-  const dt = Math.min(0.1, (now - last) / 1000);
-  last = now;
-  state.viewW = viewW;
-  state.viewH = viewH;
-
-  // Screen transitions (edge-triggered keys).
-  if (state.screen === 'title' && (consumePress(input, 'enter') || consumePress(input, ' '))) {
-    state.screen = 'play';
-    audio.unlock();
-    missionBriefing(state);
-    state.message = 'Job 1: drive to the marker. Steal a car with E if you need wheels.';
-    state.messageTimer = 5;
-  } else if (state.screen === 'play' && consumePress(input, 'escape')) {
-    state.screen = 'pause';
-    saveGame(state);
-  } else if (state.screen === 'pause' && consumePress(input, 'escape')) {
-    state.screen = 'play';
-  } else if (state.screen === 'pause' && consumePress(input, 'r')) {
-    const fresh = createWorld(seed);
-    Object.assign(state, fresh, { input, audio, viewW, viewH, saveLoaded: state.saveLoaded });
-    state.screen = 'title';
-  } else if (state.screen === 'over' && consumePress(input, 'r')) {
-    const fresh = createWorld(seed);
-    Object.assign(state, fresh, { input, audio, viewW, viewH, saveLoaded: false });
-    state.screen = 'title';
+let view = fitCanvas();
+window.addEventListener('resize', () => {
+  view = fitCanvas();
+  if (world) {
+    world.viewW = view.w;
+    world.viewH = view.h;
   }
+});
 
-  // In staged screenshot mode the autopilot keeps driving the scene.
-  if (shot && shot !== 'start' && shot !== 'end' && state.screen === 'play') {
-    acc += dt;
-    while (acc >= CONFIG.stepSeconds) {
-      autopilot(state, CONFIG.stepSeconds);
-      stepWorld(state, CONFIG.stepSeconds);
-      acc -= CONFIG.stepSeconds;
-    }
-  } else if (state.screen === 'play' || state.screen === 'title') {
-    acc += dt;
-    while (acc >= CONFIG.stepSeconds) {
-      stepWorld(state, CONFIG.stepSeconds);
-      acc -= CONFIG.stepSeconds;
-    }
-  }
-  clearPresses(input);
+function setStatus(msg) {
+  if (statusEl) statusEl.textContent = msg;
+}
 
-  ctx.clearRect(0, 0, viewW, viewH);
-  render(ctx, state, viewW, viewH);
-  if (statusEl) {
-    statusEl.textContent = state.screen === 'play'
-      ? `Solmar Bay — Rico, $${state.player.money}, wanted ${state.player.wanted} stars`
-      : 'Solmar Bay — open-world crime game';
+let world;
+if (shot) {
+  // Deterministic staging: simulate the scene, freeze it, render it.
+  world = stageScene(shot, seed);
+  world.viewW = view.w;
+  world.viewH = view.h;
+  world.saveInfo = loadSave();
+  setStatus(`Solmar Bay — staged scene "${shot}" (seed ${seed})`);
+  render(ctx, world, view.w, view.h);
+  window.__shotReady = true;
+  // Keep repainting the same frozen frame so the shot never changes.
+  const repaint = () => {
+    render(ctx, world, view.w, view.h);
+    requestAnimationFrame(repaint);
+  };
+  requestAnimationFrame(repaint);
+} else {
+  world = createWorld(seed, sound);
+  world.viewW = view.w;
+  world.viewH = view.h;
+  world.saveInfo = loadSave();
+  if (world.saveInfo) applySave(world, world.saveInfo);
+  setStatus('Solmar Bay — press Enter to play');
+  runGame(world);
+}
+
+function runGame(S) {
+  let last = performance.now();
+  let acc = 0;
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const elapsed = Math.min(0.25, (now - last) / 1000);
+    last = now;
+
+    // One-shot keys, handled by screen.
+    if (S.screen === 'title') {
+      if (input.wasPressed('enter')) {
+        sound.ensure();
+        sound.resume();
+        sound.playStation(stationById(S.radioStation));
+        S.screen = 'play';
+        setStatus('Solmar Bay — Rico is on the streets');
+      }
+      render(ctx, S, view.w, view.h);
+      input.endFrame();
+      return;
+    }
+    if (S.screen === 'pause') {
+      if (input.wasPressed('escape') || input.wasPressed('enter')) {
+        if (input.wasPressed('enter')) saveGame(S);
+        S.screen = 'play';
+      }
+      if (input.wasPressed('m')) {
+        startMission(S, S.missionIdx);
+        S.screen = 'play';
+      }
+      render(ctx, S, view.w, view.h);
+      input.endFrame();
+      return;
+    }
+    if (S.screen === 'end') {
+      if (input.wasPressed('enter')) {
+        saveGame(S);
+        const fresh = createWorld(seed, sound);
+        fresh.viewW = view.w;
+        fresh.viewH = view.h;
+        fresh.saveInfo = loadSave();
+        Object.assign(S, fresh);
+        S.screen = 'play';
+      }
+      render(ctx, S, view.w, view.h);
+      input.endFrame();
+      return;
+    }
+
+    // Play screen.
+    if (input.wasPressed('escape')) {
+      S.screen = 'pause';
+      saveGame(S);
+      render(ctx, S, view.w, view.h);
+      input.endFrame();
+      return;
+    }
+    if (input.wasPressed('q')) switchWeapon(S, 1);
+    if (input.wasPressed('r')) {
+      S.radioStation = nextStationId(S.radioStation);
+      sound.playStation(stationById(S.radioStation));
+      S.messages.push(`Radio: ${stationById(S.radioStation).name}`);
+    }
+    if (input.wasPressed('m') && S.missionState === 'failed') startMission(S, S.missionIdx);
+    if (input.wasPressed('1')) callCrew(S, 0);
+    if (input.wasPressed('2')) callCrew(S, 1);
+    if (input.wasPressed('3')) callCrew(S, 2);
+
+    // Enter/exit is a one-shot action: fire it on the first step only, so a
+    // single keypress can never enter and exit in the same frame.
+    const enterPressed = input.wasPressed('e');
+
+    acc += elapsed;
+    let steps = 0;
+    while (acc >= CFG.step && steps < 5) {
+      const simInput = {
+        up: input.held('w') || input.held('arrowup'),
+        down: input.held('s') || input.held('arrowdown'),
+        left: input.held('a') || input.held('arrowleft'),
+        right: input.held('d') || input.held('arrowright'),
+        run: input.held('shift'),
+        enter: enterPressed && steps === 0,
+        shoot: false,
+        aimAngle: 0,
+      };
+      // Shooting: mouse aim + click (or Space for fists).
+      if (input.mouseDown || input.held(' ')) {
+        simInput.aimAngle = aimAngle(S, input.mouseX, input.mouseY, view.w, view.h);
+        fireWeapon(S, simInput.aimAngle);
+      }
+      stepWorld(S, simInput, CFG.step);
+      acc -= CFG.step;
+      steps++;
+      if (S.screen !== 'play') break;
+    }
+    if (S.missionState === 'done' && currentMission(S)) saveGame(S);
+    render(ctx, S, view.w, view.h);
+    input.endFrame();
   }
   requestAnimationFrame(frame);
 }
-requestAnimationFrame(frame);

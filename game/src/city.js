@@ -1,67 +1,104 @@
-// Solmar Bay — the city grid. Roads run on a regular lattice; each block
-// between four roads holds one or two buildings. Everything is generated
-// from a seeded generator so the map is identical for a given seed.
-import { CONFIG } from './config.js';
-import { makeRng, range, intRange } from './random.js';
+// Solmar Bay's street grid: vertical and horizontal roads every block, with
+// one or two buildings inside each block. All geometry is derived from the
+// seed, so every session with the same seed builds the same city.
+import { CFG, PALETTE } from './config.js';
+import { makeRng, range, pick } from './random.js';
 
 export function buildCity(seed) {
-  const rng = makeRng(seed);
+  const rng = makeRng(seed ^ 0x9e3779b9);
   const roadsX = [];
   const roadsY = [];
-  for (let x = CONFIG.roadSpacing; x < CONFIG.worldWidth; x += CONFIG.roadSpacing) roadsX.push(x);
-  for (let y = CONFIG.roadSpacing; y < CONFIG.worldHeight; y += CONFIG.roadSpacing) roadsY.push(y);
+  for (let x = 0; x <= CFG.worldWidth; x += CFG.blockSize) roadsX.push(x);
+  for (let y = 0; y <= CFG.worldHeight; y += CFG.blockSize) roadsY.push(y);
 
   const buildings = [];
-  for (let ix = 0; ix <= roadsX.length; ix++) {
-    for (let iy = 0; iy <= roadsY.length; iy++) {
-      const x0 = (ix === 0 ? 0 : roadsX[ix - 1]) + CONFIG.blockInset;
-      const x1 = (ix === roadsX.length ? CONFIG.worldWidth : roadsX[ix]) - CONFIG.blockInset;
-      const y0 = (iy === 0 ? 0 : roadsY[iy - 1]) + CONFIG.blockInset;
-      const y1 = (iy === roadsY.length ? CONFIG.worldHeight : roadsY[iy]) - CONFIG.blockInset;
-      // The south-west corner is the beach; leave it open sand and parkland.
-      const beach = x0 < 900 && y0 > CONFIG.worldHeight - 1100;
-      if (beach && rng() < 0.7) continue;
-      const count = rng() < 0.35 ? 2 : 1;
-      for (let b = 0; b < count; b++) {
-        const w = range(rng, 90, Math.max(100, (x1 - x0) / count - 30));
-        const h = range(rng, 80, Math.max(90, y1 - y0 - 30));
-        const bx = x0 + (count === 1 ? (x1 - x0 - w) / 2 : b * ((x1 - x0) / 2) + 10);
-        const by = y0 + (y1 - y0 - h) / 2 + range(rng, -12, 12);
-        const shade = intRange(rng, 0, 2);
-        buildings.push({
-          x: bx, y: by, w, h,
-          roof: shade === 0 ? CONFIG.palette.buildingRoof : shade === 1 ? CONFIG.palette.buildingRoofAlt : CONFIG.palette.buildingRoofWarm,
-          height: intRange(rng, 1, 4),
-        });
+  const roofColors = [PALETTE.buildingRoof, PALETTE.buildingRoof2, PALETTE.buildingRoof3];
+  for (let bx = 0; bx < roadsX.length - 1; bx++) {
+    for (let by = 0; by < roadsY.length - 1; by++) {
+      const x0 = roadsX[bx] + CFG.roadHalf + 14;
+      const y0 = roadsY[by] + CFG.roadHalf + 14;
+      const x1 = roadsX[bx + 1] - CFG.roadHalf - 14;
+      const y1 = roadsY[by + 1] - CFG.roadHalf - 14;
+      // Keep the marina block (south-west corner) open as a plaza.
+      if (bx === 0 && by === roadsY.length - 2) continue;
+      // Keep the garage lot block open (south, second from the west).
+      if (bx === 1 && by === roadsY.length - 2) continue;
+      // Keep the helipad block (north-east corner) open.
+      if (bx === roadsX.length - 2 && by === 0) continue;
+      const split = rng() < 0.45;
+      if (split) {
+        const cut = x0 + (x1 - x0) * range(rng, 0.4, 0.6);
+        buildings.push(makeBuilding(rng, x0, y0, cut - 6, y1, pick(rng, roofColors)));
+        buildings.push(makeBuilding(rng, cut + 6, y0, x1, y1, pick(rng, roofColors)));
+      } else {
+        buildings.push(makeBuilding(rng, x0, y0, x1, y1, pick(rng, roofColors)));
       }
     }
   }
 
-  const city = { seed, roadsX, roadsY, buildings };
-  return city;
+  return {
+    seed,
+    roadsX,
+    roadsY,
+    buildings,
+    helipad: { x: CFG.worldWidth - 100, y: 100, r: 62 },
+    garage: { x: 210, y: 2240, w: 170, h: 120 },
+    marina: { x: 100, y: CFG.worldHeight - 100, r: 90 },
+  };
 }
 
-// True when the point (with a small radius) sits inside any building.
-export function pointBlocked(city, x, y, radius) {
+function makeBuilding(rng, x0, y0, x1, y1, roof) {
+  const w = x1 - x0;
+  const h = y1 - y0;
+  const windows = [];
+  const cols = Math.max(1, Math.floor(w / 26));
+  const rows = Math.max(1, Math.floor(h / 26));
+  for (let c = 0; c < cols; c++) {
+    for (let r = 0; r < rows; r++) {
+      if (rng() < 0.5) windows.push({ x: x0 + 10 + c * 26, y: y0 + 10 + r * 26 });
+    }
+  }
+  return { x0, y0, x1, y1, roof, windows, lit: rng() < 0.6 };
+}
+
+export function nearestRoadX(city, x) {
+  let best = city.roadsX[0];
+  for (const rx of city.roadsX) if (Math.abs(rx - x) < Math.abs(best - x)) best = rx;
+  return best;
+}
+
+export function nearestRoadY(city, y) {
+  let best = city.roadsY[0];
+  for (const ry of city.roadsY) if (Math.abs(ry - y) < Math.abs(best - y)) best = ry;
+  return best;
+}
+
+export function onRoad(city, x, y) {
+  const dx = Math.abs(x - nearestRoadX(city, x));
+  const dy = Math.abs(y - nearestRoadY(city, y));
+  return dx <= CFG.roadHalf + 6 || dy <= CFG.roadHalf + 6;
+}
+
+export function isBlocked(city, x, y) {
+  if (x < 8 || y < 8 || x > CFG.worldWidth - 8 || y > CFG.worldHeight - 8) return true;
   for (const b of city.buildings) {
-    if (x + radius > b.x && x - radius < b.x + b.w && y + radius > b.y && y - radius < b.y + b.h) return true;
+    if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) return true;
   }
   return false;
 }
 
-// Nearest point on the road lattice to (x, y).
+// The closest drivable point: snap onto the nearest road centre line.
 export function nearestRoadPoint(city, x, y) {
-  let bestX = city.roadsX[0];
-  let bestY = city.roadsY[0];
-  for (const rx of city.roadsX) if (Math.abs(rx - x) < Math.abs(bestX - x)) bestX = rx;
-  for (const ry of city.roadsY) if (Math.abs(ry - y) < Math.abs(bestY - y)) bestY = ry;
-  return { x: bestX, y: bestY };
+  const rx = nearestRoadX(city, x);
+  const ry = nearestRoadY(city, y);
+  if (Math.abs(x - rx) <= Math.abs(y - ry)) return { x: rx, y };
+  return { x, y: ry };
 }
 
-// True when the point is on a road (within half the road width of a line).
-export function onRoad(city, x, y) {
-  const half = CONFIG.roadWidth / 2;
-  for (const rx of city.roadsX) if (Math.abs(x - rx) < half) return true;
-  for (const ry of city.roadsY) if (Math.abs(y - ry) < half) return true;
-  return false;
+export function randomRoadPoint(rng, city, margin = 120) {
+  const rx = pick(rng, city.roadsX.slice(1, -1));
+  const ry = pick(rng, city.roadsY.slice(1, -1));
+  const vertical = rng() < 0.5;
+  if (vertical) return { x: rx + range(rng, -14, 14), y: range(rng, margin, CFG.worldHeight - margin) };
+  return { x: range(rng, margin, CFG.worldWidth - margin), y: ry + range(rng, -14, 14) };
 }

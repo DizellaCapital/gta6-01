@@ -1,78 +1,113 @@
-// Solmar Bay — SBPD dispatch. The number of pursuing units grows with the
-// wanted level; at 3 stars roadblocks appear, at 4–5 a police helicopter
-// joins with a spotlight cone. Units have names and roles for the HUD.
-import { CONFIG } from './config.js';
-import { nearestRoadPoint, pointBlocked } from './city.js';
+// SBPD dispatch: police units that spawn off-screen, chase and ram the
+// player, set roadblocks at wanted 3+, and send a helicopter with a
+// spotlight at wanted 4–5. Units get named roles and distances for the HUD.
+import { CFG } from './config.js';
+import { nearestRoadX, nearestRoadY, randomRoadPoint } from './city.js';
+import { range } from './random.js';
 
-export const DISPATCH_ROLES = ['Roadblock', 'Intercept', 'Spotlight', 'Flanking', 'Closing In', 'Pursuit'];
-const UNIT_NAMES = ['Unit 7', 'Unit 12', 'Unit 3', 'Unit 21', 'Unit 9', 'Unit 30', 'Unit 5', 'Unit 18'];
+export const UNIT_ROLES = ['Intercept', 'Roadblock', 'Spotlight', 'Flanking', 'Closing In', 'Pursuit'];
 
-export function wantedUnitCount(wanted) {
-  return wanted <= 0 ? 0 : wanted + 1;
+export function unitCountFor(wanted) {
+  return wanted <= 0 ? 0 : wanted * 2;
 }
 
-export function updatePolice(state, dt) {
-  const p = state.player;
-  const want = wantedUnitCount(p.wanted);
-  // Spawn units up to the wanted count, just off-screen from the player.
-  while (state.cops.length < want) {
-    const i = state.cops.length;
-    const angle = (i / Math.max(1, want)) * Math.PI * 2 + state.time * 0.1;
-    const spot = nearestRoadPoint(state.city, p.x + Math.cos(angle) * 900, p.y + Math.sin(angle) * 900);
-    state.cops.push({
-      id: 'cop' + i + '-' + Math.floor(state.time),
-      kind: 'cop',
-      x: spot.x, y: spot.y,
-      angle: Math.atan2(p.y - spot.y, p.x - spot.x),
-      speed: 0,
-      color: CONFIG.palette.copCar,
-      name: UNIT_NAMES[i % UNIT_NAMES.length],
-      role: DISPATCH_ROLES[i % DISPATCH_ROLES.length],
-      condition: 100,
-    });
+export function spawnPoliceUnit(S, role) {
+  const p = randomRoadPoint(S.rng, S.city);
+  // Spawn away from the player so units drive in instead of appearing.
+  let tries = 0;
+  while (Math.hypot(p.x - S.player.x, p.y - S.player.y) < 700 && tries++ < 8) {
+    const q = randomRoadPoint(S.rng, S.city);
+    p.x = q.x;
+    p.y = q.y;
   }
-  while (state.cops.length > want) state.cops.pop();
+  return {
+    id: S.nextId++,
+    kind: 'police',
+    x: p.x, y: p.y,
+    angle: Math.atan2(S.player.y - p.y, S.player.x - p.x),
+    speed: 0,
+    model: 'Interceptor', color: '#e8eef7', top: CFG.policeSpeed,
+    condition: 100, role: role || 'Pursuit', flash: 0, siren: 0,
+  };
+}
 
-  for (const cop of state.cops) {
-    const dx = p.x - cop.x;
-    const dy = p.y - cop.y;
+export function updatePolice(S, dt) {
+  const want = unitCountFor(S.player.wanted);
+  while (S.police.length < want) {
+    const role = UNIT_ROLES[S.police.length % UNIT_ROLES.length];
+    S.police.push(spawnPoliceUnit(S, role));
+  }
+  while (S.police.length > want) S.police.pop();
+
+  const px = S.player.x;
+  const py = S.player.y;
+  for (const unit of S.police) {
+    const dx = px - unit.x;
+    const dy = py - unit.y;
     const dist = Math.hypot(dx, dy) || 1;
-    const targetAngle = Math.atan2(dy, dx);
-    let diff = targetAngle - cop.angle;
+    const wantAngle = Math.atan2(dy, dx);
+    let diff = wantAngle - unit.angle;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
-    cop.angle += Math.max(-2.4 * dt, Math.min(2.4 * dt, diff));
-    const cruise = Math.min(CONFIG.copTopSpeed, 240 + p.wanted * 45);
-    cop.speed += (cruise - cop.speed) * Math.min(1, dt * 1.5);
-    const nx = cop.x + Math.cos(cop.angle) * cop.speed * dt;
-    const ny = cop.y + Math.sin(cop.angle) * cop.speed * dt;
-    if (!pointBlocked(state.city, nx, ny, 16)) { cop.x = nx; cop.y = ny; }
-    else { cop.angle += Math.PI / 2 * dt * 4; }
-    cop.dist = Math.round(dist);
-    // Ramming the player hurts on foot and dents a driven car.
+    unit.angle += Math.max(-2.6 * dt, Math.min(2.6 * dt, diff));
+    const targetSpeed = dist > 60 ? CFG.policeSpeed : 120;
+    unit.speed += Math.max(-420 * dt, Math.min(300 * dt, targetSpeed - unit.speed));
+    unit.x += Math.cos(unit.angle) * unit.speed * dt;
+    unit.y += Math.sin(unit.angle) * unit.speed * dt;
+    unit.flash += dt;
+    unit.siren += dt;
+    // Ramming the player hurts: car condition or health.
     if (dist < 34) {
-      if (p.onFoot) { p.health -= 14 * dt; state.bustedHold += dt; }
-      else if (p.vehicle) { p.vehicle.condition = Math.max(0, p.vehicle.condition - 6 * dt); p.health -= 3 * dt; }
+      if (S.player.car) {
+        S.player.car.condition = Math.max(0, S.player.car.condition - 14 * dt);
+        if (S.player.car.condition <= 0) S.player.hp -= 20 * dt;
+      } else {
+        S.player.hp -= 26 * dt;
+      }
+      S.shake = Math.min(8, S.shake + 6 * dt);
     }
   }
 
-  // Roadblocks at wanted 3+: static SBPD cars across the road ahead.
-  if (p.wanted >= 3 && state.roadblocks.length < 2) {
-    const ahead = nearestRoadPoint(state.city, p.x + Math.cos(p.angle) * 520, p.y + Math.sin(p.angle) * 520);
-    state.roadblocks.push({ x: ahead.x, y: ahead.y, angle: p.angle + Math.PI / 2 });
-  }
-  if (p.wanted < 3) state.roadblocks = [];
-
-  // Police helicopter at wanted 4–5, circling with a spotlight cone.
-  if (p.wanted >= 4) {
-    if (!state.copHeli) state.copHeli = { x: p.x + 300, y: p.y - 300, z: 220, angle: 0, rotor: 0 };
-    const h = state.copHeli;
-    h.rotor += dt * 22;
-    const ta = Math.atan2(p.y - h.y, p.x - h.x);
-    h.angle += Math.max(-1.6 * dt, Math.min(1.6 * dt, ta - h.angle));
-    h.x += Math.cos(h.angle) * 260 * dt;
-    h.y += Math.sin(h.angle) * 260 * dt;
+  // Roadblock at wanted 3+: two police cars parked across the road ahead.
+  if (S.player.wanted >= 3) {
+    if (!S.roadblock) {
+      const aheadX = px + Math.cos(S.player.angle) * 320;
+      const aheadY = py + Math.sin(S.player.angle) * 320;
+      S.roadblock = {
+        x: Math.max(80, Math.min(CFG.worldWidth - 80, aheadX)),
+        y: Math.max(80, Math.min(CFG.worldHeight - 80, aheadY)),
+        angle: S.player.angle + Math.PI / 2,
+      };
+    }
   } else {
-    state.copHeli = null;
+    S.roadblock = null;
   }
+
+  // Helicopter with spotlight at wanted 4–5.
+  if (S.player.wanted >= 4) {
+    if (!S.heli) {
+      S.heli = {
+        x: px - 140, y: py - 160, angle: 0, alt: 120,
+        spotX: px, spotY: py, rotor: 0,
+      };
+    }
+    const h = S.heli;
+    h.rotor += dt * 22;
+    const tx = px - 90;
+    const ty = py - 110;
+    h.x += (tx - h.x) * Math.min(1, dt * 0.8);
+    h.y += (ty - h.y) * Math.min(1, dt * 0.8);
+    h.spotX += (px - h.spotX) * Math.min(1, dt * 2.2);
+    h.spotY += (py - h.spotY) * Math.min(1, dt * 2.2);
+  } else {
+    S.heli = null;
+  }
+}
+
+export function dispatchRows(S) {
+  return S.police.map((u) => ({
+    id: u.id,
+    role: u.role,
+    dist: Math.round(Math.hypot(u.x - S.player.x, u.y - S.player.y)),
+  }));
 }

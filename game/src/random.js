@@ -1,6 +1,5 @@
-// Solmar Bay — deterministic seeded random numbers. Same seed in, same
-// numbers out, so a screenshot staged from a seed always renders the same
-// frame. Uses the mulberry32 generator, a small well-known algorithm.
+// Deterministic seeded random numbers (mulberry32). The same seed always
+// produces the same stream, so the same seed always stages the same frame.
 export function makeRng(seed) {
   let a = seed >>> 0;
   return function next() {
@@ -12,14 +11,19 @@ export function makeRng(seed) {
   };
 }
 
+export function range(rng, lo, hi) {
+  return lo + rng() * (hi - lo);
+}
+
 export function pick(rng, list) {
-  return list[Math.floor(rng() * list.length)];
+  return list[Math.floor(rng() * list.length) % list.length];
 }
 
-export function range(rng, min, max) {
-  return min + rng() * (max - min);
-}
-
-export function intRange(rng, min, max) {
-  return min + Math.floor(rng() * (max - min + 1));
+export function hashSeed(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
 }

@@ -5,14 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solmar Bay — an open-world crime game</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0e1a24; }
-  #game { position: fixed; inset: 0; display: block; background: #0e1a24; }
-  #status { position: fixed; left: -9999px; top: 0; width: 1px; height: 1px; overflow: hidden; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b1020; overflow: hidden; }
+  #game { position: fixed; inset: 0; display: block; background: #12351f; }
+  #status {
+    position: fixed; left: 8px; bottom: 6px; z-index: 5;
+    color: #cfe3ff; font: 12px/1.4 system-ui, sans-serif;
+    background: rgba(0, 0, 0, 0.45); padding: 2px 8px; border-radius: 4px;
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
 <canvas id="game" width="1280" height="720"></canvas>
-<p id="status" role="status" aria-live="polite">Solmar Bay — open-world crime game</p>
+<div id="status" role="status" aria-live="polite">Solmar Bay is loading…</div>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

@@ -1,72 +1,116 @@
-// Solmar Bay — combat. Three weapons, ammo, bullets, and damage. Shooting
-// near the law raises heat; hurting people raises it faster.
+// Combat: three weapons (fists, pistol, SMG), mouse aim, bullets, damage
+// and health + armor. Shooting a civilian or a cop raises the wanted level.
+import { CFG } from './config.js';
+
 export const WEAPONS = [
-  { name: 'Fists', slot: 1, damage: 12, rate: 0.35, range: 46, ammo: Infinity },
-  { name: 'Pistol', slot: 2, damage: 34, rate: 0.28, range: 520, ammo: 24 },
-  { name: 'SMG', slot: 3, damage: 18, rate: 0.09, range: 460, ammo: 90 },
+  { id: 0, name: 'Fists', slot: 'Fists', damage: 12, range: 46, rate: 0.35, ammo: Infinity, auto: false },
+  { id: 1, name: 'Pistol', slot: 'Pistol', damage: 26, range: 430, rate: 0.28, ammo: 24, auto: false },
+  { id: 2, name: 'SMG', slot: 'SMG', damage: 13, range: 380, rate: 0.09, ammo: 90, auto: true },
 ];
 
-export function fireWeapon(state) {
-  const p = state.player;
-  const w = WEAPONS[p.weapon];
-  if (state.time - p.lastShot < w.rate) return;
-  if (w.ammo !== Infinity && p.ammo[p.weapon] <= 0) {
-    state.message = 'Out of ammo — find a gun shop pickup.';
-    state.messageTimer = 2;
+export function weaponOf(S) {
+  return WEAPONS[S.player.weapon];
+}
+
+export function switchWeapon(S, dir) {
+  S.player.weapon = (S.player.weapon + dir + WEAPONS.length) % WEAPONS.length;
+}
+
+export function aimAngle(S, mouseX, mouseY, viewW, viewH) {
+  const px = S.player.x - S.camera.x + viewW / 2;
+  const py = S.player.y - S.camera.y + viewH / 2;
+  return Math.atan2(mouseY - py, mouseX - px);
+}
+
+export function fireWeapon(S, angle) {
+  const w = weaponOf(S);
+  const now = S.time;
+  if (now - S.player.lastShot < w.rate) return;
+  if (w.ammo !== Infinity && S.player.ammo[w.id] <= 0) {
+    S.messages.push(`${w.name} is empty — press Q to switch`);
+    S.player.lastShot = now;
     return;
   }
-  p.lastShot = state.time;
-  if (w.ammo !== Infinity) p.ammo[p.weapon]--;
-  const aimX = state.camera.x + state.input.mouseX;
-  const aimY = state.camera.y + state.input.mouseY;
-  const angle = Math.atan2(aimY - p.y, aimX - p.x);
-  const speed = 900;
-  state.bullets.push({ x: p.x + Math.cos(angle) * 22, y: p.y + Math.sin(angle) * 22, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: w.range / speed, damage: w.damage });
-  state.audio?.shoot?.();
-  addWanted(state, 0.4);
+  S.player.lastShot = now;
+  if (w.ammo !== Infinity) S.player.ammo[w.id]--;
+  S.sound?.gunshot();
+  if (w.id === 0) {
+    // Melee swing: hurt anything right in front of the player.
+    const hx = S.player.x + Math.cos(angle) * 34;
+    const hy = S.player.y + Math.sin(angle) * 34;
+    hurtNear(S, hx, hy, 40, w.damage, 'fists');
+    S.muzzle = 0.08;
+    return;
+  }
+  S.bullets.push({
+    x: S.player.x + Math.cos(angle) * 20,
+    y: S.player.y + Math.sin(angle) * 20,
+    angle,
+    speed: CFG.bulletSpeed,
+    life: w.range / CFG.bulletSpeed,
+    damage: w.damage,
+  });
+  S.muzzle = 0.06;
 }
 
-export function updateBullets(state, dt) {
-  for (const b of state.bullets) {
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
+function hurtNear(S, x, y, radius, damage, kind) {
+  for (const ped of S.peds) {
+    if (Math.hypot(ped.x - x, ped.y - y) < radius + 10) {
+      ped.hp -= damage;
+      ped.scared = 3;
+      if (ped.hp <= 0) commitCrime(S, 1, 'assault');
+    }
+  }
+  for (const cop of S.police) {
+    if (Math.hypot(cop.x - x, cop.y - y) < radius + 16) {
+      cop.condition -= damage;
+      commitCrime(S, 1, 'attacking SBPD');
+    }
+  }
+}
+
+export function updateBullets(S, dt) {
+  for (const b of S.bullets) {
+    b.x += Math.cos(b.angle) * b.speed * dt;
+    b.y += Math.sin(b.angle) * b.speed * dt;
     b.life -= dt;
-    // Hit a pedestrian.
-    for (const ped of state.peds) {
-      if (Math.hypot(ped.x - b.x, ped.y - b.y) < 14) {
+    for (const ped of S.peds) {
+      if (ped.hp > 0 && Math.hypot(ped.x - b.x, ped.y - b.y) < 12) {
+        ped.hp -= b.damage;
+        ped.scared = 3;
         b.life = 0;
-        ped.hit = true;
-        addWanted(state, 1);
-        state.message = 'A pedestrian is down — the SBPD is coming.';
-        state.messageTimer = 3;
+        if (ped.hp <= 0) commitCrime(S, 1, 'assault');
+        break;
       }
     }
-    // Hit a cop car.
-    for (const cop of state.cops) {
-      if (Math.hypot(cop.x - b.x, cop.y - b.y) < 22) {
-        b.life = 0;
+    for (const cop of S.police) {
+      if (b.life > 0 && Math.hypot(cop.x - b.x, cop.y - b.y) < 18) {
         cop.condition -= b.damage;
-        if (cop.condition <= 0) {
-          state.cops.splice(state.cops.indexOf(cop), 1);
-          addWanted(state, 1);
-        }
+        b.life = 0;
+        commitCrime(S, 1, 'attacking SBPD');
+        break;
       }
     }
   }
-  state.bullets = state.bullets.filter((b) => b.life > 0);
-  state.peds = state.peds.filter((ped) => !ped.hit);
+  S.bullets = S.bullets.filter((b) => b.life > 0);
 }
 
-// Wanted rises in whole stars on crime, capped at five.
-export function addWanted(state, amount) {
-  const p = state.player;
-  p.wantedHeat = (p.wantedHeat || 0) + amount;
-  while (p.wantedHeat >= 1 && p.wanted < 5) {
-    p.wantedHeat -= 1;
-    p.wanted++;
-    state.message = `Wanted level ${p.wanted} — SBPD dispatch responding.`;
-    state.messageTimer = 3;
+export function commitCrime(S, stars, what) {
+  S.player.wanted = Math.min(5, S.player.wanted + stars);
+  S.player.hiddenTimer = 0;
+  S.messages.push(`Wanted +${stars} — ${what}`);
+}
+
+export function hurtPlayer(S, amount) {
+  if (S.player.armor > 0) {
+    const absorbed = Math.min(S.player.armor, amount * 0.6);
+    S.player.armor -= absorbed;
+    amount -= absorbed;
   }
-  p.wantedHeat = Math.min(p.wantedHeat, 0.99);
-  p.quietTimer = 0;
+  S.player.hp -= amount;
+  if (S.player.hp <= 0) {
+    S.player.hp = 0;
+    S.screen = 'end';
+    S.endKind = S.player.wanted > 0 ? 'busted' : 'wasted';
+  }
 }

@@ -1,43 +1,62 @@
-// Solmar Bay — pedestrians. People stroll the sidewalks beside the roads,
-// pause, and turn at corners. They keep the city feeling alive.
-import { CONFIG } from './config.js';
-import { makeRng, pick, range } from './random.js';
+// Pedestrians: walkers on the sidewalks who stroll between random road
+// points, pause at corners, and scatter when a car or a gunshot comes close.
+import { CFG } from './config.js';
+import { randomRoadPoint, isBlocked } from './city.js';
+import { range, pick } from './random.js';
 
-export function spawnPedestrians(state, count) {
-  const rng = makeRng(state.seed + 131);
-  state.peds = [];
-  for (let i = 0; i < count; i++) {
-    const horizontal = rng() < 0.5;
-    const road = horizontal
-      ? pick(rng, state.city.roadsY)
-      : pick(rng, state.city.roadsX);
-    const along = range(rng, 80, (horizontal ? CONFIG.worldWidth : CONFIG.worldHeight) - 80);
-    state.peds.push({
-      id: 'p' + i,
-      horizontal,
-      road,
-      along,
-      dir: rng() < 0.5 ? 1 : -1,
-      speed: range(rng, CONFIG.pedSpeed * 0.6, CONFIG.pedSpeed * 1.3),
-      color: pick(rng, CONFIG.palette.pedColors),
-      pause: 0,
-      x: horizontal ? along : road + 44,
-      y: horizontal ? road + 44 : along,
-      angle: 0,
-    });
-  }
+const SHIRTS = ['#e84a5f', '#f2c14e', '#4ea8e8', '#7dd069', '#c77dff', '#f2f2f2', '#ff8c42'];
+
+export function spawnPed(rng, city, id) {
+  const p = randomRoadPoint(rng, city);
+  return {
+    id, x: p.x, y: p.y, angle: range(rng, 0, Math.PI * 2),
+    speed: range(rng, 35, CFG.pedSpeed), shirt: pick(rng, SHIRTS),
+    tx: p.x, ty: p.y, pause: 0, hp: 30, scared: 0,
+  };
 }
 
-export function updatePedestrians(state, dt) {
-  for (const ped of state.peds) {
-    if (ped.pause > 0) { ped.pause -= dt; continue; }
-    ped.along += ped.dir * ped.speed * dt;
-    const limit = ped.horizontal ? CONFIG.worldWidth : CONFIG.worldHeight;
-    if (ped.along < 70) { ped.along = 70; ped.dir = 1; }
-    if (ped.along > limit - 70) { ped.along = limit - 70; ped.dir = -1; }
-    if (state.rng() < 0.0015) ped.pause = range(state.rng, 1, 4);
-    if (state.rng() < 0.002) ped.dir *= -1;
-    if (ped.horizontal) { ped.x = ped.along; ped.y = ped.road + 44; ped.angle = ped.dir > 0 ? 0 : Math.PI; }
-    else { ped.x = ped.road + 44; ped.y = ped.along; ped.angle = ped.dir > 0 ? Math.PI / 2 : -Math.PI / 2; }
+export function updatePeds(S, dt) {
+  const city = S.city;
+  for (const ped of S.peds) {
+    if (ped.hp <= 0) continue;
+    if (ped.pause > 0) {
+      ped.pause -= dt;
+      continue;
+    }
+    const dx = ped.tx - ped.x;
+    const dy = ped.ty - ped.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 12) {
+      const next = randomRoadPoint(S.rng, city);
+      ped.tx = next.x;
+      ped.ty = next.y;
+      if (S.rng() < 0.3) ped.pause = range(S.rng, 0.5, 2.5);
+      continue;
+    }
+    // Flee from the player when scared.
+    let mx = dx / dist;
+    let my = dy / dist;
+    let sp = ped.speed;
+    if (ped.scared > 0) {
+      ped.scared -= dt;
+      const px = ped.x - S.player.x;
+      const py = ped.y - S.player.y;
+      const pd = Math.hypot(px, py) || 1;
+      mx = px / pd;
+      my = py / pd;
+      sp = ped.speed * 2.4;
+    }
+    const nx = ped.x + mx * sp * dt;
+    const ny = ped.y + my * sp * dt;
+    if (!isBlocked(city, nx, ny)) {
+      ped.x = nx;
+      ped.y = ny;
+      ped.angle = Math.atan2(my, mx);
+    } else {
+      const next = randomRoadPoint(S.rng, city);
+      ped.tx = next.x;
+      ped.ty = next.y;
+    }
   }
+  S.peds = S.peds.filter((p) => p.hp > 0);
 }

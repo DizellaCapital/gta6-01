@@ -1,61 +1,59 @@
-// Solmar Bay — keyboard and mouse state. One shared object; the main loop
-// reads it, the world never touches the DOM directly.
-export function createInput() {
-  return {
-    up: false, down: false, left: false, right: false,
-    action: false, // E — enter/exit vehicle, steal, pick up
-    sprint: false,
-    brake: false,
-    shoot: false,
-    mouseX: 0, mouseY: 0,
-    mouseDown: false,
-    pressed: new Set(), // keys pressed since last step (edge-triggered)
-  };
-}
-
-export function attachInput(input, canvas) {
-  const down = (e) => {
-    const k = e.key.toLowerCase();
-    if (k === 'w' || k === 'arrowup') input.up = true;
-    if (k === 's' || k === 'arrowdown') input.down = true;
-    if (k === 'a' || k === 'arrowleft') input.left = true;
-    if (k === 'd' || k === 'arrowright') input.right = true;
-    if (k === 'e') input.action = true;
-    if (k === ' ') input.brake = true;
-    if (k === 'shift') input.sprint = true;
-    input.pressed.add(k);
-    if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) e.preventDefault();
-  };
-  const up = (e) => {
-    const k = e.key.toLowerCase();
-    if (k === 'w' || k === 'arrowup') input.up = false;
-    if (k === 's' || k === 'arrowdown') input.down = false;
-    if (k === 'a' || k === 'arrowleft') input.left = false;
-    if (k === 'd' || k === 'arrowright') input.right = false;
-    if (k === 'e') input.action = false;
-    if (k === ' ') input.brake = false;
-    if (k === 'shift') input.sprint = false;
-  };
-  window.addEventListener('keydown', down);
-  window.addEventListener('keyup', up);
-  canvas.addEventListener('mousemove', (e) => {
-    const r = canvas.getBoundingClientRect();
-    input.mouseX = e.clientX - r.left;
-    input.mouseY = e.clientY - r.top;
-  });
-  canvas.addEventListener('mousedown', () => { input.mouseDown = true; input.shoot = true; });
-  window.addEventListener('mouseup', () => { input.mouseDown = false; input.shoot = false; });
-}
-
-// Edge-triggered keys are consumed once per simulation step.
-export function consumePress(input, key) {
-  if (input.pressed.has(key)) {
-    input.pressed.delete(key);
-    return true;
+// Keyboard + mouse state: which keys are held, which were just pressed this
+// frame, and where the mouse is on the screen.
+export class Input {
+  constructor(canvas) {
+    this.keys = new Set();
+    this.pressed = new Set();
+    this.mouseX = 0;
+    this.mouseY = 0;
+    this.mouseDown = false;
+    this.mouseClicked = false;
+    this.canvas = canvas;
+    this.attach();
   }
-  return false;
-}
 
-export function clearPresses(input) {
-  input.pressed.clear();
+  attach() {
+    window.addEventListener('keydown', (e) => {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.key)) {
+        e.preventDefault();
+      }
+      const k = e.key.toLowerCase();
+      if (!this.keys.has(k)) this.pressed.add(k);
+      this.keys.add(k);
+    });
+    window.addEventListener('keyup', (e) => {
+      this.keys.delete(e.key.toLowerCase());
+    });
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+    });
+    this.canvas.addEventListener('mousemove', (e) => {
+      const r = this.canvas.getBoundingClientRect();
+      this.mouseX = e.clientX - r.left;
+      this.mouseY = e.clientY - r.top;
+    });
+    this.canvas.addEventListener('mousedown', (e) => {
+      this.mouseDown = true;
+      this.mouseClicked = true;
+      const r = this.canvas.getBoundingClientRect();
+      this.mouseX = e.clientX - r.left;
+      this.mouseY = e.clientY - r.top;
+    });
+    window.addEventListener('mouseup', () => {
+      this.mouseDown = false;
+    });
+  }
+
+  held(key) {
+    return this.keys.has(key.toLowerCase());
+  }
+
+  wasPressed(key) {
+    return this.pressed.has(key.toLowerCase());
+  }
+
+  endFrame() {
+    this.pressed.clear();
+    this.mouseClicked = false;
+  }
 }
