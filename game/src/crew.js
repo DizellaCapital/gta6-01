@@ -1,48 +1,34 @@
-// Rico's crew. Three original characters, each with one ability on a
-// cooldown, triggered with keys 1/2/3. The HUD crew card shows who is
-// ready; the world applies the effect.
+// Solmar Bay — the crew. Three specialists Rico can call with keys 1–3.
+// Each ability has a cooldown shown on its card in the HUD.
 export const CREW = [
-  {
-    id: 'tito', name: 'Tito Reyes', role: 'Wheelman',
-    ability: 'Clean Plates', key: '1',
-    desc: 'Swaps the plates — wanted drops 2 stars',
-    cooldown: 45,
-  },
-  {
-    id: 'lena', name: 'Lena Park', role: 'Mechanic',
-    ability: 'Field Repair', key: '2',
-    desc: 'Patches the ride — car condition +50',
-    cooldown: 40,
-  },
-  {
-    id: 'mara', name: 'Mara Voss', role: 'Lookout',
-    ability: 'Lookout', key: '3',
-    desc: 'Eyes on the street — roadblocks marked 15s',
-    cooldown: 50,
-  },
+  { name: 'Dex', role: 'Driver', key: '1', cooldown: 60, desc: 'Calls a fast getaway car to you' },
+  { name: 'Lena', role: 'Mechanic', key: '2', cooldown: 45, desc: 'Repairs your ride to 100%' },
+  { name: 'Ivo', role: 'Lookout', key: '3', cooldown: 90, desc: 'Drops one wanted star' },
 ];
 
-export function createCrew() {
-  return {
-    members: CREW.map((c) => ({ ...c, cd: 0 })),
-    lookoutTimer: 0,
-  };
-}
-
-export function crewReady(crew, id) {
-  const m = crew.members.find((x) => x.id === id);
-  return m ? m.cd <= 0 : false;
-}
-
-export function crewUse(crew, id) {
-  const m = crew.members.find((x) => x.id === id);
-  if (!m || m.cd > 0) return null;
-  m.cd = m.cooldown;
-  if (id === 'mara') crew.lookoutTimer = 15;
-  return m;
-}
-
-export function tickCrew(crew, dt) {
-  for (const m of crew.members) m.cd = Math.max(0, m.cd - dt);
-  crew.lookoutTimer = Math.max(0, crew.lookoutTimer - dt);
+export function useCrew(state, index) {
+  const member = CREW[index];
+  if (!member) return null;
+  if (state.crewCooldown[index] > 0) return `${member.name} is resting (${Math.ceil(state.crewCooldown[index])}s).`;
+  state.crewCooldown[index] = member.cooldown;
+  const p = state.player;
+  if (index === 0) {
+    // Dex delivers a quick car right beside Rico.
+    const car = {
+      id: 'dex-' + Math.floor(state.time), kind: 'parked', x: p.x + 70, y: p.y + 30,
+      angle: 0, speed: 0, color: '#c0392b', name: 'Comet GT', condition: 100, maxSpeed: 480,
+    };
+    state.parked.push(car);
+    return 'Dex: "Comet GT is outside, Rico. Go."';
+  }
+  if (index === 1) {
+    if (p.vehicle) { p.vehicle.condition = 100; return 'Lena: "Good as new. Try not to bend it again."'; }
+    return 'Lena: "Get in a car first and I will fix it."';
+  }
+  if (p.wanted > 0) {
+    p.wanted--;
+    p.wantedHeat = 0;
+    return 'Ivo: "I made a call. One star off your back."';
+  }
+  return 'Ivo: "You are clean right now. Save me for later."';
 }

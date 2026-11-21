@@ -1,210 +1,159 @@
-// The screenshot scenes behind ?shot=start|play|chase|end. Each one plays
-// the real rules forward from a fresh world for a fixed number of steps,
-// steered by a simple autopilot that drives along the road grid toward
-// the mission marker, so the frame is what real play looks like and the
-// same seed always gives the same frame.
-// chase is the money shot: wanted 4, SBPD Air-1 overhead with its
-// spotlight on the player, a roadblock ahead, dispatch live, radio on,
-// mission JOB 1/8 running.
-import { ROADS_H, ROADS_V, STEP } from './config.js';
-import { pointInBuilding, nearestRoadPoint } from './city.js';
-import { spawnRoadblock } from './police.js';
-import { nextStation } from './radio.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// Solmar Bay — screenshot staging. Each scene runs the REAL simulation
+// forward from a fresh world with a small autopilot (drive along the road
+// grid toward the active mission target, stealing a car first when on
+// foot). Nothing here is a fake frame: traffic, police, wanted level and
+// the HUD are all live state.
+import { CONFIG } from './config.js';
+import { nearestRoadPoint } from './city.js';
+import { stepWorld, missionBriefing } from './world.js';
+import { addWanted } from './combat.js';
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 34;
-const CHASE_DRIVE_SECONDS = 12;
-const CHASE_SECONDS = 9;
-const END_SECONDS = 24;
-
-function nearest(list, v) {
-  let best = list[0];
-  for (const x of list) if (Math.abs(x - v) < Math.abs(best - v)) best = x;
-  return best;
+function angleDiff(a, b) {
+  let d = a - b;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
 }
 
-/** Next waypoint on the road grid toward the target (Manhattan routing).
- * Ride the road the car is already on to the nearest cross street, then
- * along that street to the target's avenue, then up the avenue — never
- * cut diagonally across a block. */
-function waypoint(state, target) {
+// Plan a Manhattan route along the road grid: along the current road to the
+// target's cross-street, then along that street to the target.
+export function planRoute(state, target) {
   const p = state.player;
-  const vRoad = nearest(ROADS_V, p.x);
-  const hRoad = nearest(ROADS_H, p.y);
-  const onV = Math.abs(p.x - vRoad) < 48;
-  const onH = Math.abs(p.y - hRoad) < 48;
-  if (Math.abs(p.x - target.x) <= 70) return target;
-  if (onV && !onH) return { x: vRoad, y: nearest(ROADS_H, p.y) };
-  if (onH) return { x: target.x, y: hRoad };
-  return { x: vRoad, y: hRoad };
+  const near = nearestRoadPoint(state.city, p.x, p.y);
+  const onHorizontal = Math.abs(p.y - near.y) <= Math.abs(p.x - near.x);
+  if (onHorizontal) return [{ x: target.x, y: near.y }, { x: target.x, y: target.y }];
+  return [{ x: near.x, y: target.y }, { x: target.x, y: target.y }];
 }
 
-/** Drive input steering the player's car (or feet) toward a target point. */
-let escapeUntil = 0;
-let lastPos = null;
-let stuckTime = 0;
-function resetAutopilot() {
-  escapeUntil = 0;
-  lastPos = null;
-  stuckTime = 0;
-}
-
-function autopilot(state) {
+export function autopilot(state, dt) {
   const p = state.player;
-  const target = state.missionTarget || { x: 1600, y: 850 };
-  let wp = p.onFoot ? target : waypoint(state, target);
-  // If a building is dead ahead, steer back to the nearest road first.
-  if (!p.onFoot) {
-    const ax = p.x + Math.cos(p.angle) * 90;
-    const ay = p.y + Math.sin(p.angle) * 90;
-    if (pointInBuilding(state.city, ax, ay)) {
-      const rp = nearestRoadPoint(p.x, p.y);
-      if (rp) wp = { x: rp.x, y: rp.y };
-    }
-  }
-  const dx = wp.x - p.x;
-  const dy = wp.y - p.y;
-  const want = Math.atan2(dy, dx);
-  let diff = want - p.angle;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  const steer = Math.max(-1, Math.min(1, diff * 2.5));
+  const input = state.input;
+  input.up = false; input.down = false; input.left = false; input.right = false;
+  input.shoot = false; input.mouseDown = false;
+  if (!state.auto) return;
+  const target = state.auto.target;
+  if (!target) return;
   if (p.onFoot) {
-    return { x: Math.cos(want), y: Math.sin(want), run: true };
-  }
-  // In a car: facing away from the waypoint, reverse to swing the nose
-  // around instead of driving forward into whatever is behind the car.
-  // On a hard turn, brake first, then creep-turn at low speed so the
-  // turn stays on the road. Brake only when the waypoint IS the mission
-  // target itself. Slow down approaching a waypoint so the turn stays
-  // on the road.
-  const speed = p.car ? Math.abs(p.car.speed) : 0;
-  const isFinal = wp === target;
-  const wpDist = Math.hypot(dx, dy);
-  let out;
-  if (Math.abs(diff) > 2.4) out = { x: -steer, y: 1, brake: false };
-  else if (Math.abs(diff) > 0.9) {
-    out = speed > 30
-      ? { x: steer, y: 0, brake: true }
-      : { x: steer, y: -1, brake: false };
-  } else if (wpDist < 220 && speed > 160) out = { x: steer, y: 0, brake: true };
-  else if (speed > 260) out = { x: steer, y: 0, brake: false };
-  else out = { x: steer, y: -1, brake: isFinal && wpDist < 120 };
-  // Stuck-escape: only counts while actually throttling forward yet
-  // barely moving (wedged against a building), so slow turns and
-  // braking never trip it.
-  if (p.car) {
-    if (state.time < escapeUntil) return { x: -steer, y: 1, brake: false };
-    if (lastPos) {
-      const moved = Math.hypot(p.x - lastPos.x, p.y - lastPos.y);
-      if (out.y === -1 && speed < 10 && moved < 0.2) {
-        stuckTime += STEP;
-        if (stuckTime > 3) {
-          escapeUntil = state.time + 1.0;
-          stuckTime = 0;
-          return { x: -steer, y: 1, brake: false };
-        }
-      } else stuckTime = 0;
+    // Walk toward the nearest parked car, then take it.
+    let dest = state.auto.carTarget;
+    if (!dest) {
+      let best = null;
+      let bestD = 1e9;
+      for (const car of state.parked) {
+        const d = Math.hypot(car.x - p.x, car.y - p.y);
+        if (d < bestD) { bestD = d; best = car; }
+      }
+      dest = best;
+      state.auto.carTarget = best;
     }
-    lastPos = { x: p.x, y: p.y };
+    if (dest && Math.hypot(dest.x - p.x, dest.y - p.y) < 50) {
+      input.action = true;
+      input.pressed.add('e');
+      state.auto.carTarget = null;
+      return;
+    }
+    if (dest) {
+      const dx = dest.x - p.x;
+      const dy = dest.y - p.y;
+      if (dx > 8) input.right = true;
+      if (dx < -8) input.left = true;
+      if (dy > 8) input.down = true;
+      if (dy < -8) input.up = true;
+    }
+    return;
   }
-  return out;
+  // Driving: follow the planned waypoints toward the live mission target
+  // (the stage target moves as stages complete, so replan when it does).
+  const liveTarget = state.missionStageTarget ? state.missionStageTarget.target : state.auto.target;
+  const wpKey = liveTarget.x + ',' + liveTarget.y;
+  if (!state.auto.waypoints || state.auto.wpKey !== wpKey) {
+    state.auto.waypoints = planRoute(state, liveTarget);
+    state.auto.wpIndex = 0;
+    state.auto.wpKey = wpKey;
+  }
+  const wps = state.auto.waypoints;
+  let wp = wps[state.auto.wpIndex || 0];
+  if (!wp) return;
+  if (Math.hypot(wp.x - p.x, wp.y - p.y) < 48) {
+    state.auto.wpIndex = (state.auto.wpIndex || 0) + 1;
+    wp = wps[state.auto.wpIndex || 0];
+    if (!wp) return;
+  }
+  const want = Math.atan2(wp.y - p.y, wp.x - p.x);
+  const diff = angleDiff(want, p.angle);
+  input.up = true;
+  if (diff < -0.12) input.left = true;
+  else if (diff > 0.12) input.right = true;
+  if (Math.abs(diff) > 1.2) input.up = false;
+  // Stuck against a wall: back up briefly, then replan from the current spot.
+  state.auto.stuckTime = (state.auto.stuckTime || 0) + (Math.abs(p.speed) < 12 ? dt : -dt * 2);
+  if (state.auto.stuckTime > 3) {
+    state.auto.waypoints = planRoute(state, liveTarget);
+    state.auto.wpIndex = 0;
+    state.auto.wpKey = wpKey;
+    state.auto.stuckTime = 0;
+    state.auto.reverseUntil = state.time + 0.9;
+  }
+  if (state.auto.reverseUntil && state.time < state.auto.reverseUntil) {
+    input.up = false;
+    input.down = true;
+    if (diff < -0.12) input.right = true;
+    else if (diff > 0.12) input.left = true;
+    return;
+  }
 }
 
-/**
- * Set `world` to the named scene and return the screen to draw over it.
- * start: title over a living city. play: driving to the first job,
- * wanted 1. chase: wanted 4, police heli + spotlight + roadblock,
- * dispatch live, radio on, mission live. end: busted/wasted panel
- * over a police surround (any other name: start).
- */
-export function stageShot(name, world) {
-  world.reset();
-  resetAutopilot();
-  const state = world.state;
-  if (name !== 'play' && name !== 'chase' && name !== 'end') {
-    for (let i = 0; i < START_SECONDS / STEP; i += 1) {
-      world.step(STEP, { x: 0, y: 0 });
+// Configure one scene, then advance the simulation by `seconds`.
+export function stageShot(state, shot, seconds) {
+  const p = state.player;
+  const start = { x: 1200, y: 400 };
+  if (shot === 'start') {
+    state.screen = 'title';
+    state.camera.x = 1200;
+    state.camera.y = 900;
+    state.auto = null;
+  } else if (shot === 'play') {
+    state.screen = 'play';
+    p.x = start.x; p.y = start.y; p.onFoot = true;
+    missionBriefing(state);
+    state.auto = { target: { x: 2000, y: 400 }, wpIndex: 0, stuckTime: 0 };
+    addWanted(state, 1);
+    state.auto.seconds = seconds;
+  } else if (shot === 'chase') {
+    state.screen = 'play';
+    p.x = start.x; p.y = start.y; p.onFoot = true;
+    missionBriefing(state);
+    state.auto = { target: { x: 2000, y: 400 }, wpIndex: 0, stuckTime: 0 };
+    addWanted(state, 4);
+    state.radioStation = 0;
+    state.auto.seconds = seconds;
+  } else if (shot === 'end') {
+    state.screen = 'play';
+    p.x = start.x; p.y = start.y; p.onFoot = true;
+    p.health = 100;
+    addWanted(state, 4);
+    state.auto = null;
+    // Let the cops close in for a second, then freeze on BUSTED.
+    const dt = CONFIG.stepSeconds;
+    for (let i = 0; i < Math.round(1.2 / dt); i++) stepWorld(state, dt);
+    // Surround Rico with SBPD units for the game-over frame.
+    state.cops = [];
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + 0.4;
+      state.cops.push({
+        id: 'endcop' + i, kind: 'cop', x: p.x + Math.cos(a) * 120, y: p.y + Math.sin(a) * 120,
+        angle: Math.atan2(p.y - (p.y + Math.sin(a) * 120), p.x - (p.x + Math.cos(a) * 120)),
+        speed: 0, color: CONFIG.palette.copCar, name: 'Unit ' + (i + 1), role: 'Closing In', condition: 100, dist: 120,
+      });
     }
-    return { screen: SCREEN_TITLE, info: { hasSave: false } };
-  }
-  // Get into a car first: walk to the nearest parked car, then enter it.
-  for (let i = 0; i < 8 / STEP; i += 1) {
-    if (state.player.onFoot) {
-      // Walk toward the nearest parked car (stationary, road-aligned).
-      let best = null;
-      let bestD = Infinity;
-      for (const car of state.cars) {
-        if (car.kind !== 'parked') continue;
-        const d = Math.hypot(car.x - state.player.x, car.y - state.player.y);
-        if (d < bestD) { best = car; bestD = d; }
-      }
-      if (best && bestD < 60) {
-        world.step(STEP, { x: 0, y: 0, enter: true });
-        break;
-      }
-      const want = best ? Math.atan2(best.y - state.player.y, best.x - state.player.x) : 0;
-      world.step(STEP, { x: Math.cos(want), y: Math.sin(want), run: true });
-    } else break;
-  }
-  if (state.player.onFoot) {
-    // Fallback: put Rico in the nearest car directly (still a real state).
-    world.enterNearestCar();
-  }
-  if (name === 'play') {
-    world.addWanted(1);
-    for (let i = 0; i < PLAY_SECONDS / STEP; i += 1) {
-      world.step(STEP, autopilot(state));
-      if (state.over) break;
-    }
-    return { screen: state.over ? SCREEN_OVER : SCREEN_PLAY, info: { hasSave: false } };
-  }
-  if (name === 'chase') {
-    // Radio on (Reef Radio) + armor, so the HUD shows both.
-    nextStation(state.radio);
-    state.armor = 60;
-    // Get moving on the road first, then bring the heat: the frame
-    // catches the pursuit mid-chase instead of a pile-up.
-    for (let i = 0; i < CHASE_DRIVE_SECONDS / STEP; i += 1) {
-      world.step(STEP, autopilot(state));
-      if (state.over) break;
-    }
-    world.addWanted(4);
-    // Guarantee the air unit + a roadblock are in the frame, then let
-    // the real rules run so the spotlight locks on.
-    spawnRoadblock(state, state.random);
-    for (let i = 0; i < CHASE_SECONDS / STEP; i += 1) {
-      world.step(STEP, autopilot(state));
-      if (state.over) break;
-    }
-    // Make sure police are visibly close for the shot.
-    if (state.policeCars.length === 0) world.spawnPoliceCar();
-    if (!state.policeHeli) world.addWanted(4);
-    // Stage the air unit clearly inside the frame (up-left of the player),
-    // spotlight locked on — still the real heli state, just positioned.
-    if (state.policeHeli) {
-      state.policeHeli.x = state.player.x - 200;
-      state.policeHeli.y = state.player.y - 140;
-      state.policeHeli.spotlight = 1;
-    }
-    // Dialogue + dispatch need to be legible in the still.
-    world.sayDialog('Mara Voss', 'Air-1 has you in the light, Rico — lose them before the roadblock!', 10);
-    if (state.dialog) state.dialogTimer = 10;
-    state.message = 'SBPD Air-1 overhead — lose the spotlight!';
-    state.messageTimer = 10;
-    return { screen: SCREEN_PLAY, info: { hasSave: false } };
-  }
-  // end: high heat, low health, police closing in until busted/wasted.
-  world.addWanted(5);
-  state.health = 28;
-  for (let i = 0; i < END_SECONDS / STEP; i += 1) {
-    world.step(STEP, autopilot(state));
-    if (state.over) break;
-  }
-  if (!state.over) {
-    state.over = true;
+    state.screen = 'over';
     state.overReason = 'busted';
+    return;
   }
-  return { screen: SCREEN_OVER, info: { hasSave: false } };
+  const dt = CONFIG.stepSeconds;
+  const steps = Math.round(seconds / dt);
+  for (let i = 0; i < steps; i++) {
+    autopilot(state, dt);
+    stepWorld(state, dt);
+  }
 }

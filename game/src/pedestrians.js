@@ -1,56 +1,43 @@
-// Pedestrians: Solmar Bay locals walking the sidewalks, crossing at
-// corners, and fleeing when a car screams past or a shot rings out.
-import { ROADS_H, ROADS_V, ROAD_W, WORLD } from './config.js';
+// Solmar Bay — pedestrians. People stroll the sidewalks beside the roads,
+// pause, and turn at corners. They keep the city feeling alive.
+import { CONFIG } from './config.js';
+import { makeRng, pick, range } from './random.js';
 
-const SHIRTS = ['#e74c3c', '#3498db', '#f1c40f', '#2ecc71', '#e67e22', '#9b59b6', '#ecf0f1', '#1abc9c'];
-const PANTS = ['#2c3e50', '#34495e', '#7f8c8d', '#5d4037'];
-
-export function spawnPedestrians(random, count) {
-  const peds = [];
-  for (let i = 0; i < count; i += 1) {
-    const vertical = random() < 0.5;
-    const road = vertical ? ROADS_V[Math.floor(random() * ROADS_V.length)] : ROADS_H[Math.floor(random() * ROADS_H.length)];
-    const along = 80 + random() * (vertical ? WORLD.height - 160 : WORLD.width - 160);
-    const side = random() < 0.5 ? -1 : 1;
-    const x = vertical ? road + side * (ROAD_W / 2 + 14) : along;
-    const y = vertical ? along : road + side * (ROAD_W / 2 + 14);
-    peds.push({
-      x, y, angle: random() * Math.PI * 2,
-      speed: 35 + random() * 30, walkPhase: random() * 10,
-      shirt: SHIRTS[Math.floor(random() * SHIRTS.length)],
-      pants: PANTS[Math.floor(random() * PANTS.length)],
-      panic: 0, alive: true,
+export function spawnPedestrians(state, count) {
+  const rng = makeRng(state.seed + 131);
+  state.peds = [];
+  for (let i = 0; i < count; i++) {
+    const horizontal = rng() < 0.5;
+    const road = horizontal
+      ? pick(rng, state.city.roadsY)
+      : pick(rng, state.city.roadsX);
+    const along = range(rng, 80, (horizontal ? CONFIG.worldWidth : CONFIG.worldHeight) - 80);
+    state.peds.push({
+      id: 'p' + i,
+      horizontal,
+      road,
+      along,
+      dir: rng() < 0.5 ? 1 : -1,
+      speed: range(rng, CONFIG.pedSpeed * 0.6, CONFIG.pedSpeed * 1.3),
+      color: pick(rng, CONFIG.palette.pedColors),
+      pause: 0,
+      x: horizontal ? along : road + 44,
+      y: horizontal ? road + 44 : along,
+      angle: 0,
     });
   }
-  return peds;
 }
 
-export function updatePedestrian(ped, dt, random, danger) {
-  if (!ped.alive) return;
-  ped.walkPhase += dt * 8;
-  if (ped.panic > 0) {
-    ped.panic -= dt;
-    // Flee away from the danger point.
-    const dx = ped.x - danger.x;
-    const dy = ped.y - danger.y;
-    const d = Math.hypot(dx, dy) || 1;
-    ped.angle = Math.atan2(dy, dx);
-    ped.x += (dx / d) * 150 * dt;
-    ped.y += (dy / d) * 150 * dt;
-  } else {
-    ped.x += Math.cos(ped.angle) * ped.speed * dt;
-    ped.y += Math.sin(ped.angle) * ped.speed * dt;
-    // At a block edge, turn onto a new heading (sidewalk grid).
-    if (random() < 0.004) ped.angle += (random() < 0.5 ? -1 : 1) * (Math.PI / 2);
-  }
-  ped.x = Math.max(20, Math.min(WORLD.width - 20, ped.x));
-  ped.y = Math.max(20, Math.min(WORLD.height - 20, ped.y));
-}
-
-export function scarePedestrians(peds, x, y, radius) {
-  for (const ped of peds) {
-    const dx = ped.x - x;
-    const dy = ped.y - y;
-    if (dx * dx + dy * dy < radius * radius) ped.panic = 2.5;
+export function updatePedestrians(state, dt) {
+  for (const ped of state.peds) {
+    if (ped.pause > 0) { ped.pause -= dt; continue; }
+    ped.along += ped.dir * ped.speed * dt;
+    const limit = ped.horizontal ? CONFIG.worldWidth : CONFIG.worldHeight;
+    if (ped.along < 70) { ped.along = 70; ped.dir = 1; }
+    if (ped.along > limit - 70) { ped.along = limit - 70; ped.dir = -1; }
+    if (state.rng() < 0.0015) ped.pause = range(state.rng, 1, 4);
+    if (state.rng() < 0.002) ped.dir *= -1;
+    if (ped.horizontal) { ped.x = ped.along; ped.y = ped.road + 44; ped.angle = ped.dir > 0 ? 0 : Math.PI; }
+    else { ped.x = ped.road + 44; ped.y = ped.along; ped.angle = ped.dir > 0 ? Math.PI / 2 : -Math.PI / 2; }
   }
 }
