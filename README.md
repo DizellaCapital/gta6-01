@@ -1,31 +1,32 @@
 # Solmar Bay
 
-An open-world crime story in a sun-soaked seaside city. You are Rico, a driver
-working for Mara Voss. Finish all 8 story jobs, steal cars, fly the helicopter,
-outrun the Solmar Bay Police Department — and own the city.
+An open-world crime game in the browser. Drive, steal cars, fly a helicopter,
+dodge the SBPD, and run eight story jobs for Mara Voss across a sunny coastal
+city — no libraries, no network requests, just a canvas and a seeded world.
 
-## How to play
+## Play
 
 ```sh
 node serve.ts
 ```
 
-Then open <http://localhost:8080/> in a desktop browser and press **Enter**.
+Then open http://localhost:8080/ in a browser.
 
-- **WASD / arrows** — walk and drive
-- **E** — enter / exit a car or the helicopter (steal traffic cars)
-- **Space** — shoot (mouse also aims)
-- **Q** — switch weapon (fists / pistol / SMG)
-- **R** — change radio station (4 stations)
-- **1 / 2 / 3** — call crew (Lena, Dex, Big Mo)
-- **P** — pause (S saves) • **M** — mute
+- **WASD / arrows** — walk or drive
+- **E** — enter / exit a car, board the helicopter at the helipad
+- **Space / click** — shoot
+- **Q** — change radio station
+- **1 / 2 / 3** — call a crew member (Jax, Lena, Marco)
+- **G** — store a car in the Junction garage, **R** — repair it ($100)
+- **P** — pause, **M** — mute, **Enter** — start / restart
 
-Features: a living city with traffic and pedestrians, a 1–5 star wanted system
-with named SBPD dispatch units, roadblocks and a police helicopter, 8 story
-missions including a street race and a helicopter job, a garage, a 3-person
-crew, 4 radio stations, and localStorage saves. Deterministic: the same seed
-always builds the same city.
+Progress saves to localStorage automatically.
+
+## Screenshots
+
+Four staged scenes (`?shot=start|play|chase|end&seed=1`) run the real
+simulation forward with an autopilot, so every frame is genuine gameplay.
 
 ## License
 
-MIT. Fan-made original work, not affiliated with Rockstar Games.
+MIT

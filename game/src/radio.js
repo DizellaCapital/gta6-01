@@ -1,36 +1,38 @@
-// Four radio stations. Music is synthesized in audio.js; this module owns
-// the station list, the current station and the track readout.
+// Four radio stations. The HUD shows the station name and the current track;
+// the audio engine synthesises a different groove per station.
 export const STATIONS = [
-  { name: 'SOLMAR FM', genre: 'Sunset Pop', tracks: ['Neon Coastline', 'Palm Static', 'Gold Hour Drive'] },
-  { name: 'BAY 98.5', genre: 'Latin Heat', tracks: ['Calle Sol', 'Marina Nights', 'Rumba del Puerto'] },
-  { name: 'STATIC 101', genre: 'Synthwave', tracks: ['Midnight Overdrive', 'Chrome Rain', 'Vector Dreams'] },
-  { name: 'TALK 720', genre: 'Talk & News', tracks: ['The Bay Report', 'Harbor Call-In', 'City Hall Hour'] },
+  { name: 'SOLMAR FM 88.1', genre: 'Sunset Pop', tracks: ['Palm Shadows — The Coastals', 'Neon Tide — Marina Blue', 'Golden Hour — Rico & The Palms'] },
+  { name: 'BAY BEATS 94.6', genre: 'Hip-Hop', tracks: ['Corner King — Voss', 'Run The Block — DJ Ferry', 'Lowrider Nights — Sol Mar'] },
+  { name: 'VICE ROCK 101.3', genre: 'Rock', tracks: ['Highway Heat — Asphalt', 'Chrome Hearts — The Getaways', 'Redline — Midnight Mile'] },
+  { name: 'TALK BAY 107.9', genre: 'Talk / News', tracks: ['SBPD Scanner — Live', 'Bay Talk with Mara', 'Traffic & Weather — Hourly'] },
 ];
 
-export function makeRadio() {
-  return { station: 0, track: 0, on: true };
+export function createRadio() {
+  return { station: 0, track: 0, trackTime: 0 };
 }
 
-export function stationName(radio) {
-  return STATIONS[radio.station % STATIONS.length].name;
+export function currentStation(radio) {
+  return STATIONS[radio.station];
 }
 
-export function trackName(radio) {
-  const st = STATIONS[radio.station % STATIONS.length];
-  return st.tracks[radio.track % st.tracks.length];
-}
-
-export function genreName(radio) {
-  return STATIONS[radio.station % STATIONS.length].genre;
+export function currentTrack(radio) {
+  const s = STATIONS[radio.station];
+  return s.tracks[radio.track % s.tracks.length];
 }
 
 export function nextStation(radio) {
   radio.station = (radio.station + 1) % STATIONS.length;
   radio.track = 0;
-  return radio.station;
+  radio.trackTime = 0;
+  return currentStation(radio);
 }
 
-export function nextTrack(radio) {
-  const st = STATIONS[radio.station % STATIONS.length];
-  radio.track = (radio.track + 1) % st.tracks.length;
+export function tickRadio(radio, dt) {
+  radio.trackTime += dt;
+  const s = STATIONS[radio.station];
+  const len = s.genre === 'Talk / News' ? 45 : 150;
+  if (radio.trackTime > len) {
+    radio.trackTime = 0;
+    radio.track = (radio.track + 1) % s.tracks.length;
+  }
 }

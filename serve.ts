@@ -1,9 +1,19 @@
-// Solmar Bay — tiny static server for game/ (Node 22, stdlib only).
-// Serves html/js/css/json/png/jpg, rejects paths outside the game root,
-// sends no-store so staged frames are never cached.
+// Solmar Bay — tiny static server for game/. Node 22, stdlib only.
+// Usage: node serve.ts --port 8080   (default port 8080)
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, statSync } from 'node:fs';
-import { join, resolve, extname } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join, normalize, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, 'game');
+
+const args = process.argv.slice(2);
+let port = 8080;
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--port' && args[i + 1]) port = parseInt(args[i + 1], 10);
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -16,45 +26,26 @@ const MIME = {
   '.jpeg': 'image/jpeg',
 };
 
-const ROOT = resolve('game');
-
-function parsePort(argv) {
-  const i = argv.indexOf('--port');
-  if (i >= 0 && argv[i + 1]) {
-    const p = Number(argv[i + 1]);
-    if (Number.isInteger(p) && p > 0 && p < 65536) return p;
-  }
-  return 8080;
-}
-
-const port = parsePort(process.argv.slice(2));
-
-const server = createServer((req, res) => {
+const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url || '/', 'http://localhost');
-    let path = decodeURIComponent(url.pathname);
-    if (path === '/') path = '/index.html';
-    const file = resolve(join(ROOT, path));
-    if (!file.startsWith(ROOT + '/') && file !== ROOT) {
-      res.writeHead(403, { 'content-type': 'text/plain' });
+    let rel = decodeURIComponent(url.pathname);
+    if (rel === '/') rel = '/index.html';
+    const file = normalize(join(root, rel));
+    if (!file.startsWith(root)) {
+      res.writeHead(403, { 'cache-control': 'no-store' });
       res.end('forbidden');
       return;
     }
-    if (!existsSync(file) || !statSync(file).isFile()) {
-      res.writeHead(404, { 'content-type': 'text/plain' });
-      res.end('not found');
-      return;
-    }
-    const body = readFileSync(file);
+    const data = await readFile(file);
     res.writeHead(200, {
-      'content-type': MIME[extname(file).toLowerCase()] || 'application/octet-stream',
+      'content-type': MIME[extname(file)] || 'application/octet-stream',
       'cache-control': 'no-store',
-      'content-length': body.length,
     });
-    res.end(body);
-  } catch {
-    res.writeHead(500, { 'content-type': 'text/plain' });
-    res.end('error');
+    res.end(data);
+  } catch (e) {
+    res.writeHead(404, { 'cache-control': 'no-store' });
+    res.end('not found');
   }
 });
 

@@ -1,23 +1,31 @@
-// Solmar Bay — entry point (Node 22, stdlib only).
-// Copies game/ and screenshots/ into MAKEFUN_OUTPUT_DIR and writes dossier.json
-// through the kit's buildDossier, with the gate's caps.
-import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+// Solmar Bay — Node entry point. Copies game/ and screenshots/ into the
+// output directory (MAKEFUN_OUTPUT_DIR) and writes dossier.json via the
+// vendor dossier builder. Node 22, stdlib only.
+import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const out = process.env.MAKEFUN_OUTPUT_DIR;
-if (!out) {
-  console.error('MAKEFUN_OUTPUT_DIR is not set');
-  process.exit(1);
+const here = dirname(fileURLToPath(import.meta.url));
+const outDir = process.env.MAKEFUN_OUTPUT_DIR || join(here, 'out');
+
+mkdirSync(outDir, { recursive: true });
+
+const gameSrc = join(here, 'game');
+if (!existsSync(gameSrc)) throw new Error('game/ directory missing');
+cpSync(gameSrc, join(outDir, 'game'), { recursive: true });
+
+const shotsSrc = join(here, 'screenshots');
+if (existsSync(shotsSrc)) {
+  const shots = readdirSync(shotsSrc).filter((f) => f.toLowerCase().endsWith('.jpg'));
+  if (shots.length > 0) cpSync(shotsSrc, join(outDir, 'screenshots'), { recursive: true });
 }
-mkdirSync(out, { recursive: true });
-cpSync('game', join(out, 'game'), { recursive: true });
-cpSync('screenshots', join(out, 'screenshots'), { recursive: true });
-const dossier = buildDossier(out, {
+
+const dossier = buildDossier(outDir, {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
   game_max_files: 993,
   game_max_bytes: 50331648,
 });
-writeFileSync(join(out, 'dossier.json'), dossier);
-console.log(`dossier.json written (${dossier.length} bytes) to ${out}`);
+writeFileSync(join(outDir, 'dossier.json'), dossier);
+console.log(`dossier written: ${join(outDir, 'dossier.json')} (${dossier.length} bytes)`);

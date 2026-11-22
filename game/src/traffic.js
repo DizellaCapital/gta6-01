@@ -1,96 +1,47 @@
-// Traffic AI: cars cruise along roads, turn at intersections, slow down
-// for the car ahead, and never enter buildings.
-import { CONFIG } from './config.js';
-import { nearestRoadX, nearestRoadY, isOnRoad } from './city.js';
-import { range, int, pick } from './random.js';
-
-const CAR_NAMES = ['Sunrise', 'Comet', 'Bison', 'Marlin', 'Vortex', 'Pinto', 'Falcon', 'Dune'];
-const CAR_COLORS = ['#c0392b', '#2980b9', '#27ae60', '#8e44ad', '#d35400', '#7f8c8d', '#16a085', '#f39c12'];
-
-export function makeTrafficCar(rng, x, y, angle) {
-  return {
-    id: 0,
-    x, y,
-    angle: angle ?? pick(rng, [0, Math.PI / 2, Math.PI, -Math.PI / 2]),
-    speed: range(rng, 90, 170),
-    cruise: range(rng, 100, 180),
-    color: pick(rng, CAR_COLORS),
-    kind: 'traffic',
-    name: pick(rng, CAR_NAMES),
-    health: 100,
-    driver: 'traffic',
-    turnCooldown: 0,
-  };
-}
-
-function carAhead(world, car) {
-  const ux = Math.cos(car.angle);
-  const uy = Math.sin(car.angle);
-  for (const o of world.cars) {
-    if (o === car || o.kind === 'parked') continue;
-    const dx = o.x - car.x;
-    const dy = o.y - car.y;
-    const along = dx * ux + dy * uy;
-    const side = Math.abs(-dx * uy + dy * ux);
-    if (along > 0 && along < 90 && side < 26) return true;
-  }
-  return false;
-}
+// Traffic AI: civilian cars cruise the road grid, turn at intersections,
+// and slow down for the car ahead.
+import { CFG } from './config.js';
+import { isBlocked } from './city.js';
+import { pick, chance } from './random.js';
 
 export function updateTraffic(world, dt) {
-  const rng = world.rng;
+  const { city, rng } = world;
   for (const car of world.cars) {
-    if (car.kind !== 'traffic') continue;
-    car.turnCooldown -= dt;
+    if (car.player || car.police || car.parked) continue;
+    // At an intersection, sometimes pick a new direction.
+    const nearX = Math.abs(car.x - nearest(city.xs, car.x)) < 14;
+    const nearY = Math.abs(car.y - nearest(city.ys, car.y)) < 14;
+    if (nearX && nearY && chance(rng, 0.02)) {
+      const dirs = [
+        { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 },
+      ];
+      const d = pick(rng, dirs);
+      car.dirX = d.x; car.dirY = d.y;
+    }
     // Slow for the car ahead.
-    const blocked = carAhead(world, car);
-    const target = blocked ? 0 : car.cruise;
-    car.speed += Math.max(-260 * dt, Math.min(140 * dt, target - car.speed));
-    // At an intersection, sometimes turn left/right.
-    const nx = nearestRoadX(car.x);
-    const ny = nearestRoadY(car.y);
-    const atX = nx.dist < 12;
-    const atY = ny.dist < 12;
-    if (atX && atY && car.turnCooldown <= 0 && rng() < 0.35) {
-      const turn = pick(rng, [-Math.PI / 2, Math.PI / 2]);
-      car.angle += turn;
-      car.turnCooldown = 2;
+    let targetSpeed = car.cruise;
+    for (const other of world.cars) {
+      if (other === car) continue;
+      const dx = other.x - car.x;
+      const dy = other.y - car.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 70 && dx * car.dirX + dy * car.dirY > 0) { targetSpeed = 0; break; }
     }
-    // Snap back onto the road centreline if drifted.
-    const ux = Math.cos(car.angle);
-    const uy = Math.sin(car.angle);
-    car.x += ux * car.speed * dt;
-    car.y += uy * car.speed * dt;
-    if (Math.abs(ux) > 0.7) car.y += (ny.line - car.y) * Math.min(1, 3 * dt);
-    else car.x += (nx.line - car.x) * Math.min(1, 3 * dt);
-    // Wrap around the map edges so traffic never runs out.
-    if (car.x < 40) car.x = CONFIG.WORLD_W - 40;
-    if (car.x > CONFIG.WORLD_W - 40) car.x = 40;
-    if (car.y < 40) car.y = CONFIG.WORLD_H - 40;
-    if (car.y > CONFIG.WORLD_H - 40) car.y = 40;
-    if (!isOnRoad(car.x, car.y)) {
-      // Pushed off-road somehow: steer back to the nearest road point.
-      const px = nearestRoadX(car.x).line;
-      const py = nearestRoadY(car.y).line;
-      car.angle = Math.atan2(py - car.y, px - car.x);
+    car.speed += (targetSpeed - car.speed) * Math.min(1, dt * 2);
+    const nx = car.x + car.dirX * car.speed * dt;
+    const ny = car.y + car.dirY * car.speed * dt;
+    if (!isBlocked(city, nx, ny) && nx > 40 && nx < CFG.worldW - 40 && ny > 40 && ny < CFG.worldH - 40) {
+      car.x = nx; car.y = ny;
+    } else {
+      // Turn around rather than drive into a wall.
+      car.dirX = -car.dirX; car.dirY = -car.dirY;
     }
+    car.angle = Math.atan2(car.dirY, car.dirX);
   }
 }
 
-// Keep a healthy number of traffic cars alive.
-export function maintainTraffic(world) {
-  const traffic = world.cars.filter((c) => c.kind === 'traffic').length;
-  if (traffic < 14) {
-    const xs = [200, 600, 1000, 1400, 1800, 2200, 2600, 3000];
-    const ys = [200, 600, 1000, 1400, 1800, 2200];
-    const vertical = world.rng() < 0.5;
-    const car = makeTrafficCar(
-      world.rng,
-      vertical ? xs[int(world.rng, 0, xs.length - 1)] : int(world.rng, 200, 3000),
-      vertical ? int(world.rng, 200, 2200) : ys[int(world.rng, 0, ys.length - 1)],
-      vertical ? (world.rng() < 0.5 ? Math.PI / 2 : -Math.PI / 2) : (world.rng() < 0.5 ? 0 : Math.PI),
-    );
-    car.id = world.nextCarId++;
-    world.cars.push(car);
-  }
+function nearest(list, v) {
+  let best = list[0];
+  for (const n of list) if (Math.abs(n - v) < Math.abs(best - v)) best = n;
+  return best;
 }

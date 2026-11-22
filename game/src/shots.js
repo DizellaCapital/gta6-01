@@ -1,159 +1,119 @@
-// Screenshot staging: each scene runs the REAL simulation forward from a
-// fresh world with a small deterministic autopilot — no fake frames.
-// The autopilot follows the road grid toward the mission target and gets
-// into a car first when on foot.
-import { CONFIG } from './config.js';
-import { nearestRoadPoint, nearestRoadX, nearestRoadY } from './city.js';
-import { stepWorld, playerCar } from './world.js';
-import { stageTarget } from './missions.js';
-import { syncPolice } from './police.js';
-import { makeInput } from './input.js';
+// Staging for the four screenshots. Each scene runs the REAL simulation
+// forward with a simple autopilot — no faked frames. The world starts fresh
+// from the seed, the autopilot drives toward the mission target on the road
+// grid, and the frame the screenshot takes is whatever the sim produced.
+import { CFG } from './config.js';
+import { nearestRoadPoint, isOnRoad } from './city.js';
+import { currentStage } from './missions.js';
 
-function autopilotInput(world) {
-  const input = makeInput();
+function angleDiff(a, b) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+// One autopilot decision: returns an input object for this step.
+export function autopilotInput(world) {
   const p = world.player;
-  const target = stageTarget(world.missions);
-  // On foot: walk to the nearest car, then get in.
-  if (p.onFoot && p.heliId == null) {
+  const input = {
+    up: false, down: false, left: false, right: false,
+    action: false, shoot: false, brake: false, pressed: {},
+  };
+  const target = world.mission.done ? { x: CFG.worldW / 2, y: CFG.worldH / 2 } : currentStage(world.mission).target;
+  if (p.heli) {
+    const d = angleDiff(p.heli.angle, Math.atan2(target.y - p.y, target.x - p.x));
+    input.up = true;
+    if (d > 0.15) input.right = true;
+    else if (d < -0.15) input.left = true;
+    return input;
+  }
+  if (p.onFoot) {
+    // Walk to the nearest car and get in.
     let best = null;
-    let bestD = Infinity;
+    let bestD = 1e9;
     for (const c of world.cars) {
-      if (c.kind === 'police') continue;
+      if (c.police) continue;
       const d = Math.hypot(c.x - p.x, c.y - p.y);
       if (d < bestD) { bestD = d; best = c; }
     }
-    if (best && bestD < 56) {
-      input.interact = true;
-      return input;
-    }
-    const goal = best || target;
-    steerOnFoot(input, p, goal);
+    if (!best) return input;
+    if (bestD < 60) { input.action = true; return input; }
+    const a = Math.atan2(best.y - p.y, best.x - p.x);
+    steerToward(input, p.angle, a);
     return input;
   }
-  // In a car: drive along the road grid toward the target.
-  const wp = nearestRoadPoint(target.x, target.y);
-  const dx = wp.x - p.x;
-  const dy = wp.y - p.y;
-  if (Math.abs(dx) < 30 && Math.abs(dy) < 30) return input;
-  const nx = nearestRoadX(p.x);
-  const ny = nearestRoadY(p.y);
-  const onH = ny.dist < 40;
-  const onV = nx.dist < 40;
-  let want;
-  if (onH && !onV) want = dx > 0 ? 0 : Math.PI;
-  else if (onV && !onH) want = dy > 0 ? Math.PI / 2 : -Math.PI / 2;
-  else if (Math.abs(dx) > Math.abs(dy)) want = dx > 0 ? 0 : Math.PI;
-  else want = dy > 0 ? Math.PI / 2 : -Math.PI / 2;
-  let diff = want - p.angle;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  // Only throttle when roughly lined up: full-speed turns swing wide and
-  // clip building corners. Steering still works while coasting.
-  input.up = Math.abs(diff) < 0.7;
-  if (diff > 0.12) input.right = true;
-  else if (diff < -0.12) input.left = true;
+  // Driving: aim at the target, but via the road grid when the target is off-road.
+  let waypoint = target;
+  if (!isOnRoad(world.city, target.x, target.y)) {
+    waypoint = nearestRoadPoint(world.city, target.x, target.y);
+  }
+  // If we are off-road, head for the nearest road point first.
+  if (!isOnRoad(world.city, p.x, p.y)) {
+    waypoint = nearestRoadPoint(world.city, p.x, p.y);
+  }
+  const dist = Math.hypot(waypoint.x - p.x, waypoint.y - p.y);
+  const wantAngle = Math.atan2(waypoint.y - p.y, waypoint.x - p.x);
+  const d = angleDiff(p.car.angle, wantAngle);
+  if (Math.abs(d) > 0.5 && p.car.speed > 60) input.brake = true;
+  if (Math.abs(d) < 1.9) input.up = true;
+  else if (p.car.speed > 40) input.down = true;
+  if (d > 0.12) input.right = true;
+  else if (d < -0.12) input.left = true;
+  if (dist < 70 && world.mission.done) input.up = false;
   return input;
 }
 
-function steerOnFoot(input, p, goal) {
-  const dx = goal.x - p.x;
-  const dy = goal.y - p.y;
-  if (dx > 12) input.right = true;
-  else if (dx < -12) input.left = true;
-  if (dy > 12) input.down = true;
-  else if (dy < -12) input.up = true;
+function steerToward(input, angle, wantAngle) {
+  const d = angleDiff(angle, wantAngle);
+  input.up = true;
+  if (d > 0.2) input.right = true;
+  else if (d < -0.2) input.left = true;
 }
 
-function runSim(world, seconds, drive) {
-  const steps = Math.round(seconds / CONFIG.DT);
+// Advance the world `seconds` of simulation with the autopilot.
+export function runStaging(world, stepWorld, seconds) {
+  const steps = Math.round(seconds / CFG.step);
   for (let i = 0; i < steps; i++) {
-    const input = drive ? autopilotInput(world) : makeInput();
-    stepWorld(world, input, CONFIG.DT);
-    if (world.screen !== 'play') break;
+    stepWorld(world, autopilotInput(world), CFG.step);
+    if (world.over) break;
   }
 }
 
-// Stage one named scene. Returns the world ready to render one frame.
-export function stageShot(world, name) {
-  world.screen = 'play';
-  if (name === 'start') {
-    // Title over a living city: let traffic and pedestrians move a while.
-    runSim(world, 7, false);
-    world.screen = 'title';
-    return world;
+// Apply a scene: returns { screen, seconds } for main.js to stage.
+export function stageScene(world, shot) {
+  if (shot === 'start') {
+    // Title over a living city: traffic + peds moving, no player action.
+    return { screen: 'title', seconds: 9, setup: null };
   }
-  if (name === 'play') {
-    runSim(world, 16, true);
-    // Wanted 1 with a unit in pursuit, as the brief requires.
-    world.player.wanted = 1;
-    world.player.wantedTimer = 0;
-    syncPolice(world);
-    runSim(world, 2, true);
-    return world;
+  if (shot === 'play') {
+    world.wanted = 1;
+    world.lastCrime = world.time;
+    return { screen: 'playing', seconds: 22, setup: null };
   }
-  if (name === 'chase') {
-    // Start already behind the wheel: with wanted 4 the walk to a car would
-    // end in a bust before the chase even begins.
-    const p0 = world.player;
-    const starter = world.cars.find((c) => c.kind === 'parked' && c.name === 'Comet');
-    if (starter) {
-      p0.onFoot = false;
-      p0.carId = starter.id;
-      starter.kind = 'player';
-      p0.x = starter.x; p0.y = starter.y; p0.angle = starter.angle;
-    }
-    world.player.wanted = 4;
-    world.player.wantedTimer = 0;
-    world.radio.station = 2;
-    world.message = 'SBPD Air-1 overhead — lose them!';
-    world.messageT = 30;
-    syncPolice(world);
-    runSim(world, 13, true);
-    // Make sure the heat is still on for the frame.
-    world.player.wanted = 4;
-    world.player.wantedTimer = 0;
-    syncPolice(world);
-    // Stage one roadblock right ahead of the player (on the road) so the
-    // chase frame shows it; the other stays where the sim left it.
-    const pp = world.player;
-    const ahead = nearestRoadPoint(pp.x + Math.cos(pp.angle) * 240, pp.y + Math.sin(pp.angle) * 240);
-    if (world.roadblocks.length > 0) {
-      world.roadblocks[0] = { x: ahead.x, y: ahead.y, angle: pp.angle + Math.PI / 2 };
-    }
-    return world;
+  if (shot === 'chase') {
+    world.wanted = 4;
+    world.lastCrime = world.time;
+    return { screen: 'playing', seconds: 16, setup: null };
   }
-  if (name === 'end') {
-    world.player.wanted = 5;
-    world.player.wantedTimer = 0;
-    syncPolice(world);
-    // Drive a while first so the busted frame has a story behind it.
-    runSim(world, 7, true);
-    // Surround the player on foot for the busted frame.
-    const p = world.player;
-    if (p.carId != null) {
-      const car = playerCar(world);
-      if (car) { p.x = car.x + 40; p.y = car.y; p.carId = null; p.onFoot = true; car.kind = 'parked'; car.speed = 0; }
-    }
-    if (p.heliId != null) {
-      p.heliId = null;
-      p.onFoot = true;
-      if (world.playerHeli) world.playerHeli.parked = true;
-    }
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2 + 0.4;
-      const spot = nearestRoadPoint(p.x + Math.cos(a) * 90, p.y + Math.sin(a) * 90);
-      world.police.push({
-        id: world.nextCarId++, x: spot.x, y: spot.y, angle: Math.atan2(p.y - spot.y, p.x - spot.x),
-        speed: 0, maxSpeed: 0, color: '#2f6fd0', kind: 'police',
-        name: `Unit ${3 + i} — SBPD`, role: 'Closing In', hp: 100, dead: false, stunned: 0, ramCooldown: 0,
-      });
-      world.cars.push(world.police[world.police.length - 1]);
-    }
-    world.screen = 'over';
-    world.overReason = 'busted';
-    return world;
+  if (shot === 'end') {
+    world.wanted = 5;
+    world.lastCrime = world.time;
+    return {
+      screen: 'playing', seconds: 10,
+      setup: () => {
+        // Surround Rico on foot with cops, then let the busted timer fire.
+        world.player.car = null;
+        world.player.onFoot = true;
+        world.player.heli = null;
+        for (const cop of world.police) {
+          const a = Math.atan2(cop.y - world.player.y, cop.x - world.player.x);
+          cop.x = world.player.x + Math.cos(a) * 34;
+          cop.y = world.player.y + Math.sin(a) * 34;
+        }
+        world.bustedTimer = 1.3;
+      },
+    };
   }
-  return world;
+  return { screen: 'playing', seconds: 5, setup: null };
 }
-
-export const SHOT_NAMES = ['start', 'play', 'chase', 'end'];

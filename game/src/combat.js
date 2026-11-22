@@ -1,110 +1,57 @@
-// Combat: fists / pistol / SMG, ammo, damage, player health + armor.
+// Weapons: fists, pistol, SMG. Shooting is hitscan toward the aim direction;
+// hitting cops or bystanders raises the wanted level.
+import { sfx } from './audio.js';
+
 export const WEAPONS = [
-  { id: 'fists', name: 'FISTS', damage: 12, range: 46, rate: 0.45, ammo: Infinity, auto: false },
-  { id: 'pistol', name: 'PISTOL', damage: 22, range: 320, rate: 0.3, ammo: 24, auto: false },
-  { id: 'smg', name: 'SMG', damage: 13, range: 260, rate: 0.09, ammo: 120, auto: true },
+  { name: 'Fists', slot: 1, damage: 12, range: 46, rate: 0.45, ammo: Infinity, auto: false },
+  { name: 'Pistol', slot: 2, damage: 26, range: 420, rate: 0.32, ammo: 48, auto: false },
+  { name: 'SMG', slot: 3, damage: 15, range: 360, rate: 0.09, ammo: 120, auto: true },
 ];
 
-export function makeCombat() {
-  return {
-    weapon: 0,
-    ammo: { pistol: 24, smg: 120 },
-    cooldown: 0,
-    lastShotAt: -10,
-  };
+export function createArsenal() {
+  return { slot: 0, ammo: [Infinity, 48, 120], cooldown: 0, lastShotAt: -10 };
 }
 
-export function weaponName(combat) {
-  return WEAPONS[combat.weapon].name;
+export function currentWeapon(arsenal) {
+  return WEAPONS[arsenal.slot];
 }
 
-export function weaponAmmo(combat) {
-  const w = WEAPONS[combat.weapon];
-  if (w.ammo === Infinity) return '∞';
-  return String(combat.ammo[w.id] ?? 0);
+export function switchWeapon(arsenal, slot) {
+  if (slot >= 0 && slot < WEAPONS.length) arsenal.slot = slot;
 }
 
-export function cycleWeapon(combat) {
-  combat.weapon = (combat.weapon + 1) % WEAPONS.length;
-  return WEAPONS[combat.weapon].name;
+// Returns a shot event {hit, x, y, kind} or null when on cooldown / out of ammo.
+export function tryShoot(world, arsenal, fromX, fromY, angle) {
+  const w = WEAPONS[arsenal.slot];
+  if (world.time - arsenal.lastShotAt < w.rate) return null;
+  if (arsenal.ammo[arsenal.slot] <= 0) return { hit: false, dry: true };
+  arsenal.lastShotAt = world.time;
+  if (arsenal.ammo[arsenal.slot] !== Infinity) arsenal.ammo[arsenal.slot]--;
+  sfx(arsenal.slot === 0 ? 'punch' : 'shot');
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  let best = null;
+  let bestD = w.range;
+  const targets = [];
+  for (const p of world.police) targets.push({ x: p.x, y: p.y, kind: 'cop', ref: p, r: 22 });
+  for (const p of world.peds) targets.push({ x: p.x, y: p.y, kind: 'ped', ref: p, r: 12 });
+  for (const c of world.cars) {
+    if (c.player) continue;
+    targets.push({ x: c.x, y: c.y, kind: 'car', ref: c, r: 26 });
+  }
+  for (const t of targets) {
+    const vx = t.x - fromX;
+    const vy = t.y - fromY;
+    const along = vx * dx + vy * dy;
+    if (along < 0 || along > bestD) continue;
+    const perp = Math.abs(vx * dy - vy * dx);
+    if (perp < t.r + 6 && along < bestD) { bestD = along; best = t; }
+  }
+  if (!best) return { hit: false, x: fromX + dx * w.range, y: fromY + dy * w.range };
+  best.ref.hp = (best.ref.hp ?? 100) - w.damage;
+  return { hit: true, kind: best.kind, x: best.x, y: best.y, ref: best.ref };
 }
 
-// Fire toward (tx, ty) from the player. Returns a tracer object or null.
-// Shooting in the street raises wanted; hitting police raises it more.
-export function fireWeapon(world, tx, ty) {
-  const c = world.combat;
-  const w = WEAPONS[c.weapon];
-  if (world.time - c.lastShotAt < w.rate) return null;
-  if (w.ammo !== Infinity) {
-    if ((c.ammo[w.id] ?? 0) <= 0) return { dry: true };
-    c.ammo[w.id]--;
-  }
-  c.lastShotAt = world.time;
-  const p = world.player;
-  const dx = tx - p.x;
-  const dy = ty - p.y;
-  const dist = Math.hypot(dx, dy) || 1;
-  const ux = dx / dist;
-  const uy = dy / dist;
-  const ex = p.x + ux * Math.min(dist, w.range);
-  const ey = p.y + uy * Math.min(dist, w.range);
-  // Hit the first police unit or pedestrian inside the cone.
-  let hit = null;
-  for (const u of world.police) {
-    const d = Math.hypot(u.x - p.x, u.y - p.y);
-    if (d < w.range) {
-      const dot = ((u.x - p.x) * ux + (u.y - p.y) * uy) / d;
-      if (dot > 0.94) { hit = { kind: 'police', target: u, dist: d }; break; }
-    }
-  }
-  if (!hit) {
-    for (const ped of world.peds) {
-      const d = Math.hypot(ped.x - p.x, ped.y - p.y);
-      if (d < w.range) {
-        const dot = ((ped.x - p.x) * ux + (ped.y - p.y) * uy) / d;
-        if (dot > 0.94) { hit = { kind: 'ped', target: ped, dist: d }; break; }
-      }
-    }
-  }
-  if (hit) {
-    if (hit.kind === 'police') {
-      hit.target.hp = (hit.target.hp ?? 100) - w.damage;
-      if (hit.target.hp <= 0) {
-        hit.target.dead = true;
-        world.message = 'Officer down — SBPD is furious.';
-      }
-      addWanted(world, 1);
-    } else {
-      hit.target.flee = 4;
-      addWanted(world, 1);
-      world.message = 'Civilian hit! Witnesses called SBPD.';
-    }
-  } else if (w.id !== 'fists') {
-    addWanted(world, 0); // firing alone does not raise wanted unless someone is hit
-  }
-  return { x1: p.x, y1: p.y, x2: ex, y2: ey, hit: !!hit };
-}
-
-export function addWanted(world, n) {
-  if (n <= 0) return;
-  const p = world.player;
-  p.wanted = Math.min(5, p.wanted + n);
-  p.wantedTimer = 0;
-}
-
-export function damagePlayer(world, dmg) {
-  const p = world.player;
-  if (p.armor > 0) {
-    const absorbed = Math.min(p.armor, dmg * 0.6);
-    p.armor -= absorbed;
-    p.hp -= (dmg - absorbed);
-  } else {
-    p.hp -= dmg;
-  }
-  if (p.hp <= 0) {
-    p.hp = 0;
-    p.alive = false;
-    world.screen = 'over';
-    world.overReason = 'wasted';
-  }
+export function addAmmo(arsenal, slot, n) {
+  if (arsenal.ammo[slot] !== Infinity) arsenal.ammo[slot] += n;
 }
