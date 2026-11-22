@@ -1,36 +1,23 @@
-// Solmar Bay — a complete open-world crime game for make.fun's gta6-01.
-// Node 22, standard library only. This program hands the game in: it copies
-// game/ and screenshots/ from beside this file into the output directory and
-// writes /output/dossier.json with the vendored make.fun library.
-//
-// Play it locally first with `node serve.ts`, then open http://localhost:8080.
-// Outside the grader, MAKEFUN_OUTPUT_DIR stands in for /output:
-//   MAKEFUN_OUTPUT_DIR=/tmp/gta6-out node main.ts
-
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+// Solmar Bay — entry point (Node 22, stdlib only).
+// Copies game/ and screenshots/ into MAKEFUN_OUTPUT_DIR and writes dossier.json
+// through the kit's buildDossier, with the gate's caps.
+import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
-
+const out = process.env.MAKEFUN_OUTPUT_DIR;
+if (!out) {
+  console.error('MAKEFUN_OUTPUT_DIR is not set');
+  process.exit(1);
+}
 mkdirSync(out, { recursive: true });
-cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
-mkdirSync(join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
-
-// The scorer's own caps (reference/gate.json): text_max_bytes shapes the
-// dossier text; the rest refuse an entry the scorer would refuse — more than
-// 4 screenshots or one over 256 KiB, more than 993 files in game/ or 48 MiB
-// of game files, or a path under game/ over 1000 bytes.
-writeFileSync(
-  join(out, 'dossier.json'),
-  buildDossier(out, {
-    text_max_bytes: 163840,
-    screenshots: { max: 4, max_bytes: 262144 },
-    game_max_files: 993,
-    game_max_bytes: 50331648,
-    game_path_max_bytes: 1000,
-  }),
-);
+cpSync('game', join(out, 'game'), { recursive: true });
+cpSync('screenshots', join(out, 'screenshots'), { recursive: true });
+const dossier = buildDossier(out, {
+  text_max_bytes: 163840,
+  screenshots: { max: 4, max_bytes: 262144 },
+  game_max_files: 993,
+  game_max_bytes: 50331648,
+});
+writeFileSync(join(out, 'dossier.json'), dossier);
+console.log(`dossier.json written (${dossier.length} bytes) to ${out}`);

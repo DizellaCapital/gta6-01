@@ -1,62 +1,75 @@
-// Pedestrians: walkers on the sidewalks who stroll between random road
-// points, pause at corners, and scatter when a car or a gunshot comes close.
-import { CFG } from './config.js';
-import { randomRoadPoint, isBlocked } from './city.js';
-import { range, pick } from './random.js';
+// Pedestrians: walk the sidewalks, cross at intersections, flee from gunfire
+// and from speeding cars.
+import { nearestRoadX, nearestRoadY } from './city.js';
+import { range, int, pick } from './random.js';
 
-const SHIRTS = ['#e84a5f', '#f2c14e', '#4ea8e8', '#7dd069', '#c77dff', '#f2f2f2', '#ff8c42'];
+const PED_COLORS = ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#1abc9c', '#e67e22', '#ecf0f1', '#2ecc71'];
 
-export function spawnPed(rng, city, id) {
-  const p = randomRoadPoint(rng, city);
+export function makePed(rng, x, y) {
   return {
-    id, x: p.x, y: p.y, angle: range(rng, 0, Math.PI * 2),
-    speed: range(rng, 35, CFG.pedSpeed), shirt: pick(rng, SHIRTS),
-    tx: p.x, ty: p.y, pause: 0, hp: 30, scared: 0,
+    x, y,
+    angle: pick(rng, [0, Math.PI / 2, Math.PI, -Math.PI / 2]),
+    speed: range(rng, 28, 55),
+    color: pick(rng, PED_COLORS),
+    flee: 0,
+    panic: 0,
   };
 }
 
-export function updatePeds(S, dt) {
-  const city = S.city;
-  for (const ped of S.peds) {
-    if (ped.hp <= 0) continue;
-    if (ped.pause > 0) {
-      ped.pause -= dt;
+export function updatePeds(world, dt) {
+  const rng = world.rng;
+  for (const ped of world.peds) {
+    if (ped.flee > 0) {
+      ped.flee -= dt;
+      // Run away from the player.
+      const a = Math.atan2(ped.y - world.player.y, ped.x - world.player.x);
+      ped.x += Math.cos(a) * 130 * dt;
+      ped.y += Math.sin(a) * 130 * dt;
       continue;
     }
-    const dx = ped.tx - ped.x;
-    const dy = ped.ty - ped.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < 12) {
-      const next = randomRoadPoint(S.rng, city);
-      ped.tx = next.x;
-      ped.ty = next.y;
-      if (S.rng() < 0.3) ped.pause = range(S.rng, 0.5, 2.5);
+    // Panic: run away from a fast nearby car.
+    let danger = null;
+    for (const car of world.cars) {
+      if (car.speed < 150) continue;
+      const d = Math.hypot(car.x - ped.x, car.y - ped.y);
+      if (d < 70) { danger = car; break; }
+    }
+    if (danger) {
+      const a = Math.atan2(ped.y - danger.y, ped.x - danger.x);
+      ped.x += Math.cos(a) * 120 * dt;
+      ped.y += Math.sin(a) * 120 * dt;
       continue;
     }
-    // Flee from the player when scared.
-    let mx = dx / dist;
-    let my = dy / dist;
-    let sp = ped.speed;
-    if (ped.scared > 0) {
-      ped.scared -= dt;
-      const px = ped.x - S.player.x;
-      const py = ped.y - S.player.y;
-      const pd = Math.hypot(px, py) || 1;
-      mx = px / pd;
-      my = py / pd;
-      sp = ped.speed * 2.4;
-    }
-    const nx = ped.x + mx * sp * dt;
-    const ny = ped.y + my * sp * dt;
-    if (!isBlocked(city, nx, ny)) {
-      ped.x = nx;
-      ped.y = ny;
-      ped.angle = Math.atan2(my, mx);
+    ped.x += Math.cos(ped.angle) * ped.speed * dt;
+    ped.y += Math.sin(ped.angle) * ped.speed * dt;
+    // Turn at intersections, stay near the sidewalk (just off the road line).
+    const nx = nearestRoadX(ped.x);
+    const ny = nearestRoadY(ped.y);
+    const movingX = Math.abs(Math.cos(ped.angle)) > 0.7;
+    if (movingX) {
+      ped.y += (ny.line + (ped.y > ny.line ? 34 : -34) - ped.y) * Math.min(1, 2 * dt);
+      if (nx.dist < 10 && rng() < 0.02) ped.angle = pick(rng, [Math.PI / 2, -Math.PI / 2]);
     } else {
-      const next = randomRoadPoint(S.rng, city);
-      ped.tx = next.x;
-      ped.ty = next.y;
+      ped.x += (nx.line + (ped.x > nx.line ? 34 : -34) - ped.x) * Math.min(1, 2 * dt);
+      if (ny.dist < 10 && rng() < 0.02) ped.angle = pick(rng, [0, Math.PI]);
     }
+    // Wrap at map edges.
+    if (ped.x < 30) ped.x = 3190;
+    if (ped.x > 3190) ped.x = 30;
+    if (ped.y < 30) ped.y = 2390;
+    if (ped.y > 2390) ped.y = 30;
   }
-  S.peds = S.peds.filter((p) => p.hp > 0);
+}
+
+export function maintainPeds(world) {
+  if (world.peds.length < 26) {
+    const xs = [200, 600, 1000, 1400, 1800, 2200, 2600, 3000];
+    const ys = [200, 600, 1000, 1400, 1800, 2200];
+    const ped = makePed(
+      world.rng,
+      xs[int(world.rng, 0, xs.length - 1)] + (world.rng() < 0.5 ? 34 : -34),
+      ys[int(world.rng, 0, ys.length - 1)] + (world.rng() < 0.5 ? 34 : -34),
+    );
+    world.peds.push(ped);
+  }
 }

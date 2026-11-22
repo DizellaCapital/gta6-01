@@ -1,148 +1,106 @@
-// WebAudio sound: engine hum, sirens, gunshots and pickups, plus a tiny
-// step-sequencer that plays each radio station's tune. Everything is
-// synthesised — no audio files — and every call is guarded so the game never
-// breaks when audio is unavailable (headless screenshot runs included).
-export class SoundBoard {
-  constructor() {
-    this.ctx = null;
-    this.master = null;
-    this.musicGain = null;
-    this.engineOsc = null;
-    this.engineGain = null;
-    this.station = null;
-    this.stepTimer = null;
-    this.step = 0;
-    this.muted = false;
-  }
+// WebAudio sound effects + a tiny synth radio engine. Everything is generated;
+// there are no audio files and no network. All calls are safe before any user
+// gesture and safe when AudioContext is unavailable (headless screenshots).
+let ctx = null;
+let muted = false;
+let musicTimer = null;
+let musicNodes = [];
+// Audio stays fully silent until a real user gesture: creating an
+// AudioContext earlier only logs autoplay warnings in headless runs.
+let unlocked = false;
+if (typeof window !== 'undefined') {
+  const unlock = () => { unlocked = true; };
+  window.addEventListener('pointerdown', unlock, { once: true });
+  window.addEventListener('keydown', unlock, { once: true });
+}
 
-  ensure() {
-    if (this.ctx) return true;
-    try {
+function ac() {
+  if (muted || !unlocked) return null;
+  try {
+    if (!ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return false;
-      this.ctx = new AC();
-      this.master = this.ctx.createGain();
-      this.master.gain.value = 0.5;
-      this.master.connect(this.ctx.destination);
-      this.musicGain = this.ctx.createGain();
-      this.musicGain.gain.value = 0.16;
-      this.musicGain.connect(this.master);
-      return true;
-    } catch {
-      return false;
+      if (!AC) return null;
+      ctx = new AC();
     }
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    return ctx;
+  } catch {
+    return null;
   }
+}
 
-  resume() {
-    if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume().catch(() => {});
-    }
+function tone(freq, dur, type, vol, slideTo) {
+  const c = ac();
+  if (!c) return;
+  try {
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(freq, c.currentTime);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, c.currentTime + dur);
+    g.gain.setValueAtTime(vol || 0.12, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur);
+    o.connect(g).connect(c.destination);
+    o.start();
+    o.stop(c.currentTime + dur);
+  } catch { /* audio is cosmetic */ }
+}
+
+export function sfx(name) {
+  switch (name) {
+    case 'engine': tone(70, 0.18, 'sawtooth', 0.05, 110); break;
+    case 'siren': tone(880, 0.5, 'sine', 0.06, 660); break;
+    case 'shot': tone(220, 0.09, 'square', 0.14, 60); break;
+    case 'pickup': tone(520, 0.12, 'sine', 0.12, 880); break;
+    case 'cash': tone(660, 0.1, 'sine', 0.12, 990); tone(990, 0.16, 'sine', 0.1, 1320); break;
+    case 'crash': tone(140, 0.25, 'sawtooth', 0.16, 50); break;
+    case 'door': tone(180, 0.08, 'triangle', 0.1, 120); break;
+    case 'heli': tone(55, 0.3, 'sawtooth', 0.07, 62); break;
+    case 'busted': tone(330, 0.4, 'sine', 0.12, 165); break;
+    default: break;
   }
+}
 
-  setMuted(m) {
-    this.muted = m;
-    if (this.master) this.master.gain.value = m ? 0 : 0.5;
+export function setMuted(m) {
+  muted = !!m;
+  if (muted) stopMusic();
+}
+
+export function isMuted() {
+  return muted;
+}
+
+// Simple looping bass-line sequencer: one pattern per station.
+const PATTERNS = [
+  [55, 0, 55, 65.4, 0, 49, 55, 0],
+  [82.4, 82.4, 0, 98, 82.4, 0, 73.4, 98],
+  [110, 0, 130.8, 0, 98, 0, 110, 123.5],
+  [65.4, 0, 0, 65.4, 78, 0, 65.4, 87.3],
+];
+
+export function startMusic(station) {
+  stopMusic();
+  const c = ac();
+  if (!c) return;
+  const pattern = PATTERNS[station % PATTERNS.length];
+  let step = 0;
+  const tick = () => {
+    const f = pattern[step % pattern.length];
+    step++;
+    if (f) tone(f, 0.22, 'triangle', 0.07);
+    if (step % 2 === 0) tone(f ? f * 2 : 220, 0.1, 'sine', 0.03);
+  };
+  tick();
+  musicTimer = setInterval(tick, 240);
+}
+
+export function stopMusic() {
+  if (musicTimer) {
+    clearInterval(musicTimer);
+    musicTimer = null;
   }
-
-  blip(freq, dur, type = 'sine', vol = 0.2) {
-    if (!this.ensure() || this.muted) return;
-    try {
-      const t = this.ctx.currentTime;
-      const o = this.ctx.createOscillator();
-      const g = this.ctx.createGain();
-      o.type = type;
-      o.frequency.value = freq;
-      g.gain.setValueAtTime(vol, t);
-      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-      o.connect(g);
-      g.connect(this.master);
-      o.start(t);
-      o.stop(t + dur);
-    } catch { /* audio is best-effort */ }
+  for (const n of musicNodes) {
+    try { n.stop(); } catch { /* noop */ }
   }
-
-  noise(dur, vol = 0.25) {
-    if (!this.ensure() || this.muted) return;
-    try {
-      const t = this.ctx.currentTime;
-      const len = Math.floor(this.ctx.sampleRate * dur);
-      const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
-      const g = this.ctx.createGain();
-      g.gain.value = vol;
-      src.connect(g);
-      g.connect(this.master);
-      src.start(t);
-    } catch { /* audio is best-effort */ }
-  }
-
-  gunshot() { this.noise(0.12, 0.3); this.blip(160, 0.08, 'square', 0.12); }
-  pickup() { this.blip(660, 0.09); setTimeout(() => this.blip(990, 0.12), 70); }
-  crash() { this.noise(0.25, 0.35); }
-  sirenBlip() { this.blip(720, 0.18, 'triangle', 0.1); }
-
-  engine(on, speedRatio) {
-    if (!this.ensure() || this.muted) return;
-    try {
-      if (!on) {
-        if (this.engineOsc) { this.engineOsc.stop(); this.engineOsc = null; this.engineGain = null; }
-        return;
-      }
-      if (!this.engineOsc) {
-        this.engineOsc = this.ctx.createOscillator();
-        this.engineOsc.type = 'sawtooth';
-        this.engineGain = this.ctx.createGain();
-        this.engineGain.gain.value = 0.03;
-        this.engineOsc.connect(this.engineGain);
-        this.engineGain.connect(this.master);
-        this.engineOsc.start();
-      }
-      this.engineOsc.frequency.value = 55 + speedRatio * 140;
-      this.engineGain.gain.value = 0.02 + speedRatio * 0.05;
-    } catch { /* audio is best-effort */ }
-  }
-
-  // A station is { name, bpm, scale: [semitone offsets], root, wave }.
-  playStation(station) {
-    this.station = station;
-    this.step = 0;
-    if (this.stepTimer) { clearInterval(this.stepTimer); this.stepTimer = null; }
-    if (!station || !this.ensure() || this.muted) return;
-    const stepMs = 60000 / station.bpm / 2;
-    this.stepTimer = setInterval(() => this.playStep(), stepMs);
-  }
-
-  playStep() {
-    if (!this.ctx || !this.station || this.muted) return;
-    try {
-      const s = this.station;
-      const scale = s.scale;
-      const idx = s.pattern[this.step % s.pattern.length];
-      if (idx >= 0) {
-        const semi = scale[idx % scale.length] + 12 * Math.floor(idx / scale.length);
-        const freq = s.root * Math.pow(2, semi / 12);
-        const t = this.ctx.currentTime;
-        const o = this.ctx.createOscillator();
-        const g = this.ctx.createGain();
-        o.type = s.wave || 'triangle';
-        o.frequency.value = freq;
-        g.gain.setValueAtTime(0.14, t);
-        g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
-        o.connect(g);
-        g.connect(this.musicGain);
-        o.start(t);
-        o.stop(t + 0.25);
-      }
-      if (this.step % 8 === 0) this.blip(s.root / 2, 0.2, 'sine', 0.08);
-      this.step++;
-    } catch { /* audio is best-effort */ }
-  }
-
-  stopMusic() {
-    if (this.stepTimer) { clearInterval(this.stepTimer); this.stepTimer = null; }
-    this.station = null;
-  }
+  musicNodes = [];
 }

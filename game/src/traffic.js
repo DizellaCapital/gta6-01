@@ -1,100 +1,96 @@
-// Traffic: civilian cars that cruise the road grid, turn at intersections
-// and slow down for the car ahead. They are also the cars the player steals.
-import { CFG } from './config.js';
-import { nearestRoadX, nearestRoadY, isBlocked } from './city.js';
-import { pick, range } from './random.js';
+// Traffic AI: cars cruise along roads, turn at intersections, slow down
+// for the car ahead, and never enter buildings.
+import { CONFIG } from './config.js';
+import { nearestRoadX, nearestRoadY, isOnRoad } from './city.js';
+import { range, int, pick } from './random.js';
 
-const MODELS = [
-  { name: 'Marlin', color: '#3f7fd0', top: 150 },
-  { name: 'Cortina', color: '#d0a23f', top: 140 },
-  { name: 'Vela', color: '#7d3fd0', top: 165 },
-  { name: 'Sunbeam', color: '#e8e4da', top: 145 },
-  { name: 'Kestrel', color: '#2fae7d', top: 175 },
-  { name: 'Dune', color: '#c25a2e', top: 155 },
-];
+const CAR_NAMES = ['Sunrise', 'Comet', 'Bison', 'Marlin', 'Vortex', 'Pinto', 'Falcon', 'Dune'];
+const CAR_COLORS = ['#c0392b', '#2980b9', '#27ae60', '#8e44ad', '#d35400', '#7f8c8d', '#16a085', '#f39c12'];
 
-export function modelByIndex(i) {
-  return MODELS[i % MODELS.length];
-}
-
-export function spawnTrafficCar(rng, city, id) {
-  const vertical = rng() < 0.5;
-  let x;
-  let y;
-  let angle;
-  if (vertical) {
-    x = pick(rng, city.roadsX.slice(1, -1)) + (rng() < 0.5 ? -14 : 14);
-    y = range(rng, 100, CFG.worldHeight - 100);
-    angle = rng() < 0.5 ? -Math.PI / 2 : Math.PI / 2;
-  } else {
-    y = pick(rng, city.roadsY.slice(1, -1)) + (rng() < 0.5 ? -14 : 14);
-    x = range(rng, 100, CFG.worldWidth - 100);
-    angle = rng() < 0.5 ? 0 : Math.PI;
-  }
-  const m = modelByIndex(Math.floor(rng() * MODELS.length));
+export function makeTrafficCar(rng, x, y, angle) {
   return {
-    id, kind: 'traffic', x, y, angle, speed: range(rng, 90, CFG.trafficSpeed),
-    model: m.name, color: m.color, top: m.top, condition: 100,
-    vertical, lane: rng() < 0.5 ? -14 : 14, turnAt: null, flash: 0,
+    id: 0,
+    x, y,
+    angle: angle ?? pick(rng, [0, Math.PI / 2, Math.PI, -Math.PI / 2]),
+    speed: range(rng, 90, 170),
+    cruise: range(rng, 100, 180),
+    color: pick(rng, CAR_COLORS),
+    kind: 'traffic',
+    name: pick(rng, CAR_NAMES),
+    health: 100,
+    driver: 'traffic',
+    turnCooldown: 0,
   };
 }
 
-export function updateTraffic(S, dt) {
-  const city = S.city;
-  for (const car of S.cars) {
+function carAhead(world, car) {
+  const ux = Math.cos(car.angle);
+  const uy = Math.sin(car.angle);
+  for (const o of world.cars) {
+    if (o === car || o.kind === 'parked') continue;
+    const dx = o.x - car.x;
+    const dy = o.y - car.y;
+    const along = dx * ux + dy * uy;
+    const side = Math.abs(-dx * uy + dy * ux);
+    if (along > 0 && along < 90 && side < 26) return true;
+  }
+  return false;
+}
+
+export function updateTraffic(world, dt) {
+  const rng = world.rng;
+  for (const car of world.cars) {
     if (car.kind !== 'traffic') continue;
-    // Slow for the car directly ahead on the same lane.
-    let ahead = null;
-    for (const other of S.cars) {
-      if (other === car) continue;
-      const dx = other.x - car.x;
-      const dy = other.y - car.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist > 90 || dist < 1) continue;
-      const facing = Math.cos(car.angle) * (dx / dist) + Math.sin(car.angle) * (dy / dist);
-      if (facing > 0.85) { ahead = other; break; }
+    car.turnCooldown -= dt;
+    // Slow for the car ahead.
+    const blocked = carAhead(world, car);
+    const target = blocked ? 0 : car.cruise;
+    car.speed += Math.max(-260 * dt, Math.min(140 * dt, target - car.speed));
+    // At an intersection, sometimes turn left/right.
+    const nx = nearestRoadX(car.x);
+    const ny = nearestRoadY(car.y);
+    const atX = nx.dist < 12;
+    const atY = ny.dist < 12;
+    if (atX && atY && car.turnCooldown <= 0 && rng() < 0.35) {
+      const turn = pick(rng, [-Math.PI / 2, Math.PI / 2]);
+      car.angle += turn;
+      car.turnCooldown = 2;
     }
-    const targetSpeed = ahead ? 0 : car.top;
-    car.speed += Math.max(-260 * dt, Math.min(120 * dt, targetSpeed - car.speed));
-
-    // At an intersection, sometimes turn onto the cross road.
-    const rx = nearestRoadX(city, car.x);
-    const ry = nearestRoadY(city, car.y);
-    const atCross = Math.abs(car.x - rx) < 10 && Math.abs(car.y - ry) < 10;
-    if (atCross && car.turnAt !== `${rx},${ry}`) {
-      car.turnAt = `${rx},${ry}`;
-      if (S.rng() < 0.3) {
-        car.vertical = !car.vertical;
-        const dir = S.rng() < 0.5 ? -1 : 1;
-        car.angle = car.vertical ? (dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (dir > 0 ? 0 : Math.PI);
-        car.lane = S.rng() < 0.5 ? -14 : 14;
-      }
+    // Snap back onto the road centreline if drifted.
+    const ux = Math.cos(car.angle);
+    const uy = Math.sin(car.angle);
+    car.x += ux * car.speed * dt;
+    car.y += uy * car.speed * dt;
+    if (Math.abs(ux) > 0.7) car.y += (ny.line - car.y) * Math.min(1, 3 * dt);
+    else car.x += (nx.line - car.x) * Math.min(1, 3 * dt);
+    // Wrap around the map edges so traffic never runs out.
+    if (car.x < 40) car.x = CONFIG.WORLD_W - 40;
+    if (car.x > CONFIG.WORLD_W - 40) car.x = 40;
+    if (car.y < 40) car.y = CONFIG.WORLD_H - 40;
+    if (car.y > CONFIG.WORLD_H - 40) car.y = 40;
+    if (!isOnRoad(car.x, car.y)) {
+      // Pushed off-road somehow: steer back to the nearest road point.
+      const px = nearestRoadX(car.x).line;
+      const py = nearestRoadY(car.y).line;
+      car.angle = Math.atan2(py - car.y, px - car.x);
     }
-
-    // Ease the car back onto its lane centre.
-    const wantX = car.vertical ? rx + car.lane : car.x;
-    const wantY = car.vertical ? car.y : ry + car.lane;
-    const nx = car.x + Math.cos(car.angle) * car.speed * dt;
-    const ny = car.y + Math.sin(car.angle) * car.speed * dt;
-    if (!isBlocked(city, nx, ny)) {
-      car.x = nx;
-      car.y = ny;
-    } else {
-      car.speed = 0;
-      car.angle += Math.PI / 2;
-    }
-    if (car.vertical) car.x += (wantX - car.x) * Math.min(1, dt * 2);
-    else car.y += (wantY - car.y) * Math.min(1, dt * 2);
-    if (car.flash > 0) car.flash -= dt;
   }
 }
 
-// A parked car the player can steal: placed on a road shoulder.
-export function spawnParkedCar(rng, city, id, x, y, angle) {
-  const m = modelByIndex(Math.floor(rng() * MODELS.length));
-  return {
-    id, kind: 'parked', x, y, angle, speed: 0,
-    model: m.name, color: m.color, top: m.top, condition: Math.floor(range(rng, 55, 98)),
-    vertical: false, lane: 0, turnAt: null, flash: 0,
-  };
+// Keep a healthy number of traffic cars alive.
+export function maintainTraffic(world) {
+  const traffic = world.cars.filter((c) => c.kind === 'traffic').length;
+  if (traffic < 14) {
+    const xs = [200, 600, 1000, 1400, 1800, 2200, 2600, 3000];
+    const ys = [200, 600, 1000, 1400, 1800, 2200];
+    const vertical = world.rng() < 0.5;
+    const car = makeTrafficCar(
+      world.rng,
+      vertical ? xs[int(world.rng, 0, xs.length - 1)] : int(world.rng, 200, 3000),
+      vertical ? int(world.rng, 200, 2200) : ys[int(world.rng, 0, ys.length - 1)],
+      vertical ? (world.rng() < 0.5 ? Math.PI / 2 : -Math.PI / 2) : (world.rng() < 0.5 ? 0 : Math.PI),
+    );
+    car.id = world.nextCarId++;
+    world.cars.push(car);
+  }
 }

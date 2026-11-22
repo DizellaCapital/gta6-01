@@ -1,60 +1,68 @@
-// Circular minimap: roads, the player, police, the mission target and the
-// helipad, drawn inside a ring in the corner of the HUD.
-import { PALETTE } from './config.js';
-import { currentStage } from './missions.js';
+// Circular minimap: roads, player, police, mission target, helipad.
+import { CONFIG } from './config.js';
+import { roadXs, roadYs } from './city.js';
+import { missionTarget } from './world.js';
 
-export function drawMinimap(ctx, S, cx, cy, radius) {
-  const W = 3200;
-  const H = 2400;
-  const scale = (radius * 2) / Math.max(W, H);
+export function drawMinimap(ctx, world, cx, cy, r) {
+  const scale = (r * 2) / Math.max(CONFIG.WORLD_W, CONFIG.WORLD_H);
+  const toX = (x) => cx - r + x * scale;
+  const toY = (y) => cy - r + y * scale;
   ctx.save();
   ctx.beginPath();
-  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.clip();
-  ctx.fillStyle = '#101c10';
-  ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
-
+  // Background.
+  ctx.fillStyle = 'rgba(20, 40, 24, 0.92)';
+  ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+  // Sea on the west edge.
+  ctx.fillStyle = 'rgba(46, 111, 142, 0.9)';
+  ctx.fillRect(cx - r, cy - r, 90 * scale + 4, r * 2);
   // Roads.
-  ctx.strokeStyle = '#5a5a62';
+  ctx.strokeStyle = 'rgba(200, 200, 200, 0.75)';
   ctx.lineWidth = 2;
-  for (const rx of S.city.roadsX) {
+  for (const x of roadXs()) {
     ctx.beginPath();
-    ctx.moveTo(cx + (rx - W / 2) * scale, cy - radius);
-    ctx.lineTo(cx + (rx - W / 2) * scale, cy + radius);
+    ctx.moveTo(toX(x), cy - r);
+    ctx.lineTo(toX(x), cy + r);
     ctx.stroke();
   }
-  for (const ry of S.city.roadsY) {
+  for (const y of roadYs()) {
     ctx.beginPath();
-    ctx.moveTo(cx - radius, cy + (ry - H / 2) * scale);
-    ctx.lineTo(cx + radius, cy + (ry - H / 2) * scale);
+    ctx.moveTo(cx - r, toY(y));
+    ctx.lineTo(cx + r, toY(y));
     ctx.stroke();
-  }
-
-  const dot = (x, y, color, r) => {
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(cx + (x - W / 2) * scale, cy + (y - H / 2) * scale, r, 0, Math.PI * 2);
-    ctx.fill();
-  };
-
-  // Mission target.
-  const stage = currentStage(S);
-  const target = stage?.at || null;
-  if (target) {
-    const pulse = 3 + Math.sin(S.time * 4) * 1.5;
-    dot(target.x, target.y, PALETTE.marker, pulse + 2);
   }
   // Helipad.
-  dot(S.city.helipad.x, S.city.helipad.y, '#7dd0ff', 3);
-  // Police.
-  for (const u of S.police) dot(u.x, u.y, PALETTE.policeBlue, 2.5);
-  if (S.heli) dot(S.heli.x, S.heli.y, '#ff8c42', 3.5);
-  // Player: white triangle pointing along the heading.
-  const px = cx + (S.player.x - W / 2) * scale;
-  const py = cy + (S.player.y - H / 2) * scale;
+  ctx.fillStyle = '#e8b73a';
+  ctx.fillRect(toX(world.helipad.x) - 3, toY(world.helipad.y) - 3, 6, 6);
+  // Mission target.
+  const t = missionTarget(world);
+  if (t && !world.missions.done) {
+    const pulse = 4 + Math.sin(world.time * 4) * 1.5;
+    ctx.fillStyle = '#ffd700';
+    ctx.beginPath();
+    ctx.arc(toX(t.x), toY(t.y), pulse, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Police units.
+  ctx.fillStyle = '#4d9fff';
+  for (const u of world.police) {
+    if (u.dead) continue;
+    ctx.beginPath();
+    ctx.arc(toX(u.x), toY(u.y), 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (world.heliPolice) {
+    ctx.fillStyle = '#4d9fff';
+    ctx.beginPath();
+    ctx.arc(toX(world.heliPolice.x), toY(world.heliPolice.y), 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Player arrow.
+  const p = world.player;
   ctx.save();
-  ctx.translate(px, py);
-  ctx.rotate(S.player.angle);
+  ctx.translate(toX(p.x), toY(p.y));
+  ctx.rotate(p.angle);
   ctx.fillStyle = '#ffffff';
   ctx.beginPath();
   ctx.moveTo(6, 0);
@@ -63,11 +71,15 @@ export function drawMinimap(ctx, S, cx, cy, radius) {
   ctx.closePath();
   ctx.fill();
   ctx.restore();
-
   ctx.restore();
+  // Rim + label.
   ctx.strokeStyle = 'rgba(255,255,255,0.85)';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.font = 'bold 10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('SOLMAR BAY', cx, cy + r + 13);
 }

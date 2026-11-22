@@ -1,36 +1,31 @@
 # Solmar Bay
 
-An original open-world crime game that runs offline in a desktop browser —
-a sun-soaked coastal city to explore on foot, by car and by helicopter.
+An open-world crime story in a sun-soaked seaside city. You are Rico, a driver
+working for Mara Voss. Finish all 8 story jobs, steal cars, fly the helicopter,
+outrun the Solmar Bay Police Department — and own the city.
 
-You are Rico, a wheelman working for Mara Voss. Drive the streets of Solmar
-Bay, steal cars, outrun the SBPD's five-star wanted system, run eight story
-jobs, race the Sunset Strip, keep a garage of stolen rides, call your
-three-person crew, and tune four radio stations — all with a dense HUD,
-a circular minimap and a save that persists in localStorage.
-
-## Play
+## How to play
 
 ```sh
 node serve.ts
 ```
 
-Then open http://localhost:8080 in a desktop browser.
+Then open <http://localhost:8080/> in a desktop browser and press **Enter**.
 
-- **WASD** move / drive · **E** enter or steal a car (or take the helicopter
-  from the helipad) · **Mouse** aim, **click** shoot · **Q** switch weapon
-- **R** change radio station · **1 / 2 / 3** call Dex, Lena or Ivo
-- **Esc** pause · **M** retry a failed job
+- **WASD / arrows** — walk and drive
+- **E** — enter / exit a car or the helicopter (steal traffic cars)
+- **Space** — shoot (mouse also aims)
+- **Q** — switch weapon (fists / pistol / SMG)
+- **R** — change radio station (4 stations)
+- **1 / 2 / 3** — call crew (Lena, Dex, Big Mo)
+- **P** — pause (S saves) • **M** — mute
 
-## Details
-
-- No libraries, no network requests: plain ES modules + 2D canvas.
-- Deterministic: the same seed stages the same screenshot frames
-  (`?shot=start|play|chase|end&seed=1`).
-- 8 story missions, 5-star wanted ladder with dispatch roles, roadblocks
-  and a police helicopter with a spotlight at wanted 4–5, street racing,
-  a garage, a 3-person crew and 4 synth radio stations.
+Features: a living city with traffic and pedestrians, a 1–5 star wanted system
+with named SBPD dispatch units, roadblocks and a police helicopter, 8 story
+missions including a street race and a helicopter job, a garage, a 3-person
+crew, 4 radio stations, and localStorage saves. Deterministic: the same seed
+always builds the same city.
 
 ## License
 
-MIT — see LICENSE.
+MIT. Fan-made original work, not affiliated with Rockstar Games.

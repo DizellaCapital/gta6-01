@@ -1,201 +1,159 @@
-// Screenshot staging: each of the four scenes runs the REAL simulation
-// forward a fixed number of steps from a fresh world, with a simple
-// autopilot that walks, steals a car and drives the road grid toward the
-// mission target. Nothing here is a fake frame — the same seed always
-// stages the same picture.
-import { CFG } from './config.js';
-import { createWorld, stepWorld, enterCar, nearestEnterableCar } from './world.js';
-import { nearestRoadX, nearestRoadY } from './city.js';
-import { currentStage } from './missions.js';
-import { commitCrime } from './combat.js';
+// Screenshot staging: each scene runs the REAL simulation forward from a
+// fresh world with a small deterministic autopilot — no fake frames.
+// The autopilot follows the road grid toward the mission target and gets
+// into a car first when on foot.
+import { CONFIG } from './config.js';
+import { nearestRoadPoint, nearestRoadX, nearestRoadY } from './city.js';
+import { stepWorld, playerCar } from './world.js';
+import { stageTarget } from './missions.js';
+import { syncPolice } from './police.js';
+import { makeInput } from './input.js';
 
-const STEP = 1 / 60;
-
-// Desired heading for a road-following drive toward (tx, ty): stay on the
-// grid, turn at intersections, head down the axis that is furthest away.
-function roadHeading(S, x, y, tx, ty) {
-  const city = S.city;
-  // Close to the target, head straight at it: this is how the autopilot
-  // walks across an open lot (marina, garage, helipad) to a car or a
-  // mission point that sits off the road grid.
-  if (Math.hypot(tx - x, ty - y) < 220) return { x: tx, y: ty };
-  const rx = nearestRoadX(city, x);
-  const ry = nearestRoadY(city, y);
-  const onV = Math.abs(x - rx) < 26;
-  const onH = Math.abs(y - ry) < 26;
-  if (onV && onH) {
-    // At an intersection: go down the axis with the bigger gap.
-    if (Math.abs(tx - x) > Math.abs(ty - y)) return { x: x + Math.sign(tx - x) * 120, y };
-    return { x, y: y + Math.sign(ty - y) * 120 };
+function autopilotInput(world) {
+  const input = makeInput();
+  const p = world.player;
+  const target = stageTarget(world.missions);
+  // On foot: walk to the nearest car, then get in.
+  if (p.onFoot && p.heliId == null) {
+    let best = null;
+    let bestD = Infinity;
+    for (const c of world.cars) {
+      if (c.kind === 'police') continue;
+      const d = Math.hypot(c.x - p.x, c.y - p.y);
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    if (best && bestD < 56) {
+      input.interact = true;
+      return input;
+    }
+    const goal = best || target;
+    steerOnFoot(input, p, goal);
+    return input;
   }
-  if (onV) {
-    const crossY = nearestRoadY(city, ty);
-    if (Math.abs(y - crossY) > 30) return { x: rx, y: crossY };
-    return { x: nearestRoadX(city, tx), y: crossY };
-  }
-  if (onH) {
-    const crossX = nearestRoadX(city, tx);
-    if (Math.abs(x - crossX) > 30) return { x: crossX, y: ry };
-    return { x: crossX, y: nearestRoadY(city, ty) };
-  }
-  return { x: rx, y: ry };
-}
-
-function keysToward(S, heading, inCar) {
-  const dx = heading.x - S.player.x;
-  const dy = heading.y - S.player.y;
-  const want = Math.atan2(dy, dx);
-  if (!inCar) {
-    return {
-      up: dy < -8, down: dy > 8, left: dx < -8, right: dx > 8,
-      run: true, enter: false, shoot: false, aimAngle: want,
-    };
-  }
-  let diff = want - S.player.angle;
+  // In a car: drive along the road grid toward the target.
+  const wp = nearestRoadPoint(target.x, target.y);
+  const dx = wp.x - p.x;
+  const dy = wp.y - p.y;
+  if (Math.abs(dx) < 30 && Math.abs(dy) < 30) return input;
+  const nx = nearestRoadX(p.x);
+  const ny = nearestRoadY(p.y);
+  const onH = ny.dist < 40;
+  const onV = nx.dist < 40;
+  let want;
+  if (onH && !onV) want = dx > 0 ? 0 : Math.PI;
+  else if (onV && !onH) want = dy > 0 ? Math.PI / 2 : -Math.PI / 2;
+  else if (Math.abs(dx) > Math.abs(dy)) want = dx > 0 ? 0 : Math.PI;
+  else want = dy > 0 ? Math.PI / 2 : -Math.PI / 2;
+  let diff = want - p.angle;
   while (diff > Math.PI) diff -= Math.PI * 2;
   while (diff < -Math.PI) diff += Math.PI * 2;
-  // Coast into turns instead of carrying full speed around the corner.
-  const dist = Math.hypot(dx, dy);
-  const aligned = Math.abs(diff) < 1.1;
-  const nearTurn = dist < 150 && Math.abs(diff) > 0.35;
-  return {
-    up: aligned && !nearTurn,
-    down: Math.abs(diff) > 2.4,
-    left: diff < -0.08,
-    right: diff > 0.08,
-    run: false, enter: false, shoot: false, aimAngle: want,
-  };
+  // Only throttle when roughly lined up: full-speed turns swing wide and
+  // clip building corners. Steering still works while coasting.
+  input.up = Math.abs(diff) < 0.7;
+  if (diff > 0.12) input.right = true;
+  else if (diff < -0.12) input.left = true;
+  return input;
 }
 
-function autopilotInput(S) {
-  const p = S.player;
-  const stage = currentStage(S);
-  if (p.flying) return { up: true, down: false, left: false, right: false, run: false, enter: false, shoot: false, aimAngle: 0 };
-  if (p.car) {
-    const target = stage?.at || { x: 1500, y: 500 };
-    const heading = roadHeading(S, p.x, p.y, target.x, target.y);
-    return keysToward(S, heading, true);
-  }
-  // On foot: walk to the nearest stealable car first.
-  const car = nearestEnterableCar(S, 400);
-  if (car) {
-    const d = Math.hypot(car.x - p.x, car.y - p.y);
-    if (d < 30) return { up: false, down: false, left: false, right: false, run: false, enter: true, shoot: false, aimAngle: 0 };
-    const heading = roadHeading(S, p.x, p.y, car.x, car.y);
-    return keysToward(S, heading, false);
-  }
-  const stage2 = stage?.at || { x: 1500, y: 500 };
-  return keysToward(S, roadHeading(S, p.x, p.y, stage2.x, stage2.y), false);
+function steerOnFoot(input, p, goal) {
+  const dx = goal.x - p.x;
+  const dy = goal.y - p.y;
+  if (dx > 12) input.right = true;
+  else if (dx < -12) input.left = true;
+  if (dy > 12) input.down = true;
+  else if (dy < -12) input.up = true;
 }
 
-function runSteps(S, count, driver) {
-  for (let i = 0; i < count; i++) {
-    const input = driver ? driver(S) : { up: false, down: false, left: false, right: false, run: false, enter: false, shoot: false, aimAngle: 0 };
-    stepWorld(S, input, STEP);
-    if (S.screen === 'end') break;
+function runSim(world, seconds, drive) {
+  const steps = Math.round(seconds / CONFIG.DT);
+  for (let i = 0; i < steps; i++) {
+    const input = drive ? autopilotInput(world) : makeInput();
+    stepWorld(world, input, CONFIG.DT);
+    if (world.screen !== 'play') break;
   }
 }
 
-// A stateful driver wrapper: if the car has barely moved for a while it is
-// stuck on a corner, so reverse out for a moment, then carry on.
-function makeDriver() {
-  let lastX = null;
-  let lastY = null;
-  let still = 0;
-  let reversing = 0;
-  return function driver(S) {
-    const p = S.player;
-    if (lastX !== null) {
-      const moved = Math.hypot(p.x - lastX, p.y - lastY);
-      if (p.car && moved < 2) still++;
-      else still = 0;
+// Stage one named scene. Returns the world ready to render one frame.
+export function stageShot(world, name) {
+  world.screen = 'play';
+  if (name === 'start') {
+    // Title over a living city: let traffic and pedestrians move a while.
+    runSim(world, 7, false);
+    world.screen = 'title';
+    return world;
+  }
+  if (name === 'play') {
+    runSim(world, 16, true);
+    // Wanted 1 with a unit in pursuit, as the brief requires.
+    world.player.wanted = 1;
+    world.player.wantedTimer = 0;
+    syncPolice(world);
+    runSim(world, 2, true);
+    return world;
+  }
+  if (name === 'chase') {
+    // Start already behind the wheel: with wanted 4 the walk to a car would
+    // end in a bust before the chase even begins.
+    const p0 = world.player;
+    const starter = world.cars.find((c) => c.kind === 'parked' && c.name === 'Comet');
+    if (starter) {
+      p0.onFoot = false;
+      p0.carId = starter.id;
+      starter.kind = 'player';
+      p0.x = starter.x; p0.y = starter.y; p0.angle = starter.angle;
     }
-    lastX = p.x;
-    lastY = p.y;
-    if (still > 90) {
-      reversing = 45;
-      still = 0;
+    world.player.wanted = 4;
+    world.player.wantedTimer = 0;
+    world.radio.station = 2;
+    world.message = 'SBPD Air-1 overhead — lose them!';
+    world.messageT = 30;
+    syncPolice(world);
+    runSim(world, 13, true);
+    // Make sure the heat is still on for the frame.
+    world.player.wanted = 4;
+    world.player.wantedTimer = 0;
+    syncPolice(world);
+    // Stage one roadblock right ahead of the player (on the road) so the
+    // chase frame shows it; the other stays where the sim left it.
+    const pp = world.player;
+    const ahead = nearestRoadPoint(pp.x + Math.cos(pp.angle) * 240, pp.y + Math.sin(pp.angle) * 240);
+    if (world.roadblocks.length > 0) {
+      world.roadblocks[0] = { x: ahead.x, y: ahead.y, angle: pp.angle + Math.PI / 2 };
     }
-    if (reversing > 0) {
-      reversing--;
-      return { up: false, down: true, left: true, right: false, run: false, enter: false, shoot: false, aimAngle: 0 };
+    return world;
+  }
+  if (name === 'end') {
+    world.player.wanted = 5;
+    world.player.wantedTimer = 0;
+    syncPolice(world);
+    // Drive a while first so the busted frame has a story behind it.
+    runSim(world, 7, true);
+    // Surround the player on foot for the busted frame.
+    const p = world.player;
+    if (p.carId != null) {
+      const car = playerCar(world);
+      if (car) { p.x = car.x + 40; p.y = car.y; p.carId = null; p.onFoot = true; car.kind = 'parked'; car.speed = 0; }
     }
-    return autopilotInput(S);
-  };
+    if (p.heliId != null) {
+      p.heliId = null;
+      p.onFoot = true;
+      if (world.playerHeli) world.playerHeli.parked = true;
+    }
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + 0.4;
+      const spot = nearestRoadPoint(p.x + Math.cos(a) * 90, p.y + Math.sin(a) * 90);
+      world.police.push({
+        id: world.nextCarId++, x: spot.x, y: spot.y, angle: Math.atan2(p.y - spot.y, p.x - spot.x),
+        speed: 0, maxSpeed: 0, color: '#2f6fd0', kind: 'police',
+        name: `Unit ${3 + i} — SBPD`, role: 'Closing In', hp: 100, dead: false, stunned: 0, ramCooldown: 0,
+      });
+      world.cars.push(world.police[world.police.length - 1]);
+    }
+    world.screen = 'over';
+    world.overReason = 'busted';
+    return world;
+  }
+  return world;
 }
 
-export function stageScene(scene, seed) {
-  const S = createWorld(seed, null);
-  S.viewW = 1280;
-  S.viewH = 720;
-  const drive = makeDriver();
-
-  if (scene === 'start') {
-    // Title over a living city: park Rico at a road intersection by the
-    // marina, let traffic run.
-    S.player.x = 400;
-    S.player.y = 2200;
-    S.camera.x = S.player.x;
-    S.camera.y = S.player.y;
-    S.screen = 'title';
-    runSteps(S, 360, null);
-    S.screen = 'title';
-    return S;
-  }
-
-  if (scene === 'play') {
-    S.screen = 'play';
-    runSteps(S, 720, drive);
-    S.screen = 'play';
-    return S;
-  }
-
-  if (scene === 'chase') {
-    S.screen = 'play';
-    // Get Rico into a car first, then turn the heat all the way up.
-    runSteps(S, 420, drive);
-    if (!S.player.car) {
-      const car = S.cars.find((c) => c.kind === 'parked');
-      if (car) {
-        S.player.x = car.x;
-        S.player.y = car.y;
-        enterCar(S, car);
-      }
-    }
-    commitCrime(S, 3, 'staged chase');
-    S.player.wanted = 4;
-    S.radioStation = 0;
-    runSteps(S, 540, drive);
-    // Make sure the helicopter is in frame for the money shot.
-    if (S.heli) {
-      S.heli.x = S.player.x - 120;
-      S.heli.y = S.player.y - 130;
-      S.heli.spotX = S.player.x;
-      S.heli.spotY = S.player.y;
-    }
-    S.screen = 'play';
-    return S;
-  }
-
-  // end: Rico busted, police closing in around him.
-  S.screen = 'play';
-  runSteps(S, 300, drive);
-  S.player.wanted = 4;
-  S.player.hp = 12;
-  S.player.armor = 0;
-  runSteps(S, 120, drive);
-  S.screen = 'end';
-  S.endKind = 'busted';
-  // Surround Rico with police cars for the end frame.
-  const spots = [
-    [-70, -40], [70, -40], [-70, 50], [70, 50],
-  ];
-  S.police = spots.map(([dx, dy], i) => ({
-    id: 900 + i, kind: 'police', x: S.player.x + dx, y: S.player.y + dy,
-    angle: Math.atan2(-dy, -dx), speed: 0, model: 'Interceptor',
-    color: '#e8eef7', top: 470, condition: 100,
-    role: ['Intercept', 'Roadblock', 'Flanking', 'Closing In'][i],
-    flash: i * 0.4, siren: 0,
-  }));
-  return S;
-}
+export const SHOT_NAMES = ['start', 'play', 'chase', 'end'];
