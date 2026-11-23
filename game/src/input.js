@@ -1,50 +1,83 @@
-// Keyboard + mouse state. `pressed` holds keys that went down since the last
-// simulation step (edge-triggered actions such as entering a car), while
-// `down` holds the keys currently held. Call endStep() once per frame.
+// Keyboard + mouse state. The game reads this, never the DOM directly.
+
 export function createInput() {
-  const input = {
-    down: new Set(),
-    pressed: new Set(),
-    mouse: { x: 0, y: 0, down: false, clicked: false },
-    attach(canvas) {
-      window.addEventListener('keydown', (e) => {
-        if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
-        if (!input.down.has(e.code)) input.pressed.add(e.code);
-        input.down.add(e.code);
-      });
-      window.addEventListener('keyup', (e) => {
-        input.down.delete(e.code);
-      });
-      canvas.addEventListener('mousemove', (e) => {
-        const r = canvas.getBoundingClientRect();
-        input.mouse.x = e.clientX - r.left;
-        input.mouse.y = e.clientY - r.top;
-      });
-      canvas.addEventListener('mousedown', (e) => {
-        input.mouse.down = true;
-        input.mouse.clicked = true;
-        const r = canvas.getBoundingClientRect();
-        input.mouse.x = e.clientX - r.left;
-        input.mouse.y = e.clientY - r.top;
-      });
-      window.addEventListener('mouseup', () => {
-        input.mouse.down = false;
-      });
-      window.addEventListener('blur', () => {
-        input.down.clear();
-        input.mouse.down = false;
-      });
-    },
-    is(code) {
-      return input.down.has(code);
-    },
-    wasPressed(code) {
-      return input.pressed.has(code);
-    },
-    endStep() {
-      input.pressed.clear();
-      input.mouse.clicked = false;
-    },
+  return {
+    up: false,
+    down: false,
+    left: false,
+    right: false,
+    sprint: false,
+    action: false, // E — enter / exit / steal car
+    shoot: false,
+    brake: false,
+    mouseX: 0,
+    mouseY: 0,
+    mouseDown: false,
+    pressed: new Set(), // keys pressed since last consume
   };
-  return input;
+}
+
+const KEY_MAP = {
+  KeyW: 'up', ArrowUp: 'up',
+  KeyS: 'down', ArrowDown: 'down',
+  KeyA: 'left', ArrowLeft: 'left',
+  KeyD: 'right', ArrowRight: 'right',
+  ShiftLeft: 'sprint', ShiftRight: 'sprint',
+  KeyE: 'action',
+  Space: 'brake',
+};
+
+export function attachInput(input, target) {
+  target.addEventListener('keydown', (e) => {
+    const field = KEY_MAP[e.code];
+    if (field) {
+      input[field] = true;
+      input.pressed.add(e.code);
+      e.preventDefault();
+    }
+    if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3') {
+      input.pressed.add(e.code);
+    }
+    if (e.code === 'KeyQ' || e.code === 'KeyR' || e.code === 'KeyF' || e.code === 'KeyC') {
+      input.pressed.add(e.code);
+    }
+    if (e.code === 'Escape' || e.code === 'KeyP' || e.code === 'Enter') {
+      input.pressed.add(e.code);
+    }
+  });
+  target.addEventListener('keyup', (e) => {
+    const field = KEY_MAP[e.code];
+    if (field) input[field] = false;
+  });
+  target.addEventListener('mousemove', (e) => {
+    input.mouseX = e.clientX;
+    input.mouseY = e.clientY;
+  });
+  target.addEventListener('mousedown', (e) => {
+    input.mouseDown = true;
+    input.shoot = true;
+    input.mouseX = e.clientX;
+    input.mouseY = e.clientY;
+  });
+  target.addEventListener('mouseup', () => {
+    input.mouseDown = false;
+    input.shoot = false;
+  });
+  target.addEventListener('blur', () => {
+    input.up = input.down = input.left = input.right = false;
+    input.sprint = false;
+    input.shoot = false;
+  });
+}
+
+export function wasPressed(input, code) {
+  if (input.pressed.has(code)) {
+    input.pressed.delete(code);
+    return true;
+  }
+  return false;
+}
+
+export function clearPressed(input) {
+  input.pressed.clear();
 }

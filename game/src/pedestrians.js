@@ -1,63 +1,56 @@
-// Pedestrians. They stroll along the sidewalks (a fixed offset from the road
-// centre line), pause now and then, and pick a new direction at crossings.
-import { CFG } from './config.js';
-import { nearestRoadX, nearestRoadY } from './city.js';
+// Pedestrian AI: people stroll the sidewalks, pause at corners, and
+// scatter when a car or a gunshot comes too close.
 
-const SIDEWALK = CFG.ROAD_W / 2 + 10;
+import { CONFIG } from './config.js';
+import { nearestRoadPoint, onRoad } from './city.js';
+import { range, pick, chance } from './random.js';
 
-export function makePed(city, rng) {
-  const horizontal = rng.chance(0.5);
-  let x;
-  let y;
-  let axis;
-  let dir;
-  if (horizontal) {
-    y = rng.pick(city.roadsY) + (rng.chance(0.5) ? SIDEWALK : -SIDEWALK);
-    x = rng.range(CFG.GRID, CFG.WORLD_W - CFG.GRID);
-    axis = 'h';
-    dir = rng.chance(0.5) ? 1 : -1;
-  } else {
-    x = rng.pick(city.roadsX) + (rng.chance(0.5) ? SIDEWALK : -SIDEWALK);
-    y = rng.range(CFG.GRID, CFG.WORLD_H - CFG.GRID);
-    axis = 'v';
-    dir = rng.chance(0.5) ? 1 : -1;
-  }
+const SHIRTS = ['#e07a5f', '#81b29a', '#f2cc8f', '#6d9dc5', '#b5838d', '#e9c46a'];
+
+export function spawnPedestrian(city, rng) {
+  const p = nearestRoadPoint(city, range(rng, 100, CONFIG.WORLD_W - 100), range(rng, 100, CONFIG.WORLD_H - 100));
   return {
-    x, y, axis, dir,
-    speed: rng.range(28, 62),
-    pause: rng.range(0, 2),
-    color: rng.pick(CFG.PED_COLORS),
-    shirt: rng.pick(CFG.SHIRT_COLORS),
-    r: 5,
+    x: p.x + (p.axis === 'v' ? (chance(rng, 0.5) ? 44 : -44) : 0),
+    y: p.y + (p.axis === 'h' ? (chance(rng, 0.5) ? 44 : -44) : 0),
+    angle: pick(rng, [0, Math.PI / 2, Math.PI, -Math.PI / 2]),
+    speed: range(rng, CONFIG.PED_SPEED * 0.6, CONFIG.PED_SPEED * 1.3),
+    shirt: pick(rng, SHIRTS),
+    panic: 0,
+    pause: range(rng, 0, 3),
   };
 }
 
-export function stepPeds(city, peds, dt, rng) {
-  for (const p of peds) {
-    if (p.pause > 0) {
-      p.pause -= dt;
+export function stepPedestrians(world, dt) {
+  const { city, rng, player } = world;
+  for (const ped of world.peds) {
+    if (ped.panic > 0) ped.panic -= dt;
+    // Panic: run away from the player / the noise.
+    const dxp = ped.x - player.x;
+    const dyp = ped.y - player.y;
+    const dp = Math.hypot(dxp, dyp);
+    if (dp < 90 && (player.speed > 200 || world.shotsFired > 0)) ped.panic = 1.5;
+    if (ped.panic > 0) {
+      const runAngle = Math.atan2(dyp, dxp);
+      ped.x += Math.cos(runAngle) * CONFIG.PED_SPEED * 2.4 * dt;
+      ped.y += Math.sin(runAngle) * CONFIG.PED_SPEED * 2.4 * dt;
+      ped.angle = runAngle;
       continue;
     }
-    p.x += p.axis === 'h' ? p.dir * p.speed * dt : 0;
-    p.y += p.axis === 'v' ? p.dir * p.speed * dt : 0;
-    // At a crossing, sometimes turn onto the other road.
-    const nearX = nearestRoadX(city, p.x).dist < 10;
-    const nearY = nearestRoadY(city, p.y).dist < 10;
-    if (nearX && nearY && rng.chance(0.02)) {
-      if (p.axis === 'h') {
-        p.axis = 'v';
-        p.dir = rng.chance(0.5) ? 1 : -1;
-        p.x = nearestRoadX(city, p.x).value + (rng.chance(0.5) ? SIDEWALK : -SIDEWALK);
-      } else {
-        p.axis = 'h';
-        p.dir = rng.chance(0.5) ? 1 : -1;
-        p.y = nearestRoadY(city, p.y).value + (rng.chance(0.5) ? SIDEWALK : -SIDEWALK);
-      }
+    if (ped.pause > 0) {
+      ped.pause -= dt;
+      continue;
     }
-    if (rng.chance(0.0015)) p.pause = rng.range(0.5, 2.5);
-    if (p.x < 24) { p.x = 24; p.dir = 1; }
-    if (p.x > CFG.WORLD_W - 24) { p.x = CFG.WORLD_W - 24; p.dir = -1; }
-    if (p.y < 24) { p.y = 24; p.dir = 1; }
-    if (p.y > CFG.WORLD_H - 24) { p.y = CFG.WORLD_H - 24; p.dir = -1; }
+    ped.x += Math.cos(ped.angle) * ped.speed * dt;
+    ped.y += Math.sin(ped.angle) * ped.speed * dt;
+    // Reached the end of a sidewalk stretch: turn or pause.
+    if (!onRoad(city, ped.x, ped.y)) {
+      const snap = nearestRoadPoint(city, ped.x, ped.y);
+      ped.x = snap.x + (snap.axis === 'v' ? 44 : 0);
+      ped.y = snap.y + (snap.axis === 'h' ? 44 : 0);
+      ped.angle = pick(rng, [0, Math.PI / 2, Math.PI, -Math.PI / 2]);
+      ped.pause = range(rng, 0.5, 3);
+    }
+    ped.x = Math.max(16, Math.min(CONFIG.WORLD_W - 16, ped.x));
+    ped.y = Math.max(16, Math.min(CONFIG.WORLD_H - 16, ped.y));
   }
 }

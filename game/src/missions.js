@@ -1,156 +1,157 @@
-// Mara Voss's eight story jobs. Each job is a short chain of stages; a stage
-// is reached by driving (or flying) to its marker. Race stages add a timer
-// and a chain of checkpoints. Targets are road intersections, so every
-// marker is reachable on the street grid.
-import { CFG } from './config.js';
+// The 8 story jobs Mara Voss hands Rico. Each job has stages; every stage
+// has a label, a target on the map and a time limit. Rewards are paid in cash.
 
-function at(city, ix, iy) {
-  return { x: city.roadsX[ix], y: city.roadsY[iy] };
+import { CONFIG } from './config.js';
+
+export const MISSIONS = [
+  {
+    name: 'First Pickup',
+    intro: 'Mara Voss: Rico, welcome back. Pick up the package at the marina and bring it to me. No cops.',
+    stages: [
+      { label: 'Pick up the package at Marina del Sol', x: 600, y: 200, radius: 90, timer: 120 },
+      { label: 'Deliver the package to Mara at Voss Heights', x: 600, y: 1000, radius: 90, timer: 120 },
+    ],
+    reward: 400,
+  },
+  {
+    name: 'Street Heat',
+    intro: 'Mara Voss: The Voss crew needs a driver for the street race. Win it and the whole city hears your name.',
+    stages: [
+      { label: 'Reach the race start on Calle Ocho', x: 1400, y: 1000, radius: 90, timer: 100 },
+      { label: 'Race checkpoint 1 — Palm Court', x: 2600, y: 200, radius: 110, timer: 75 },
+      { label: 'Race checkpoint 2 — finish at North Docks', x: 2600, y: 1000, radius: 110, timer: 75 },
+    ],
+    reward: 900,
+  },
+  {
+    name: 'Silent Docks',
+    intro: 'Mara Voss: A shipment is sitting unguarded at the North Docks. Take it. Quietly.',
+    stages: [
+      { label: 'Slip into the North Docks', x: 2600, y: 1400, radius: 100, timer: 130 },
+      { label: 'Grab the shipment', x: 3000, y: 1400, radius: 80, timer: 60 },
+      { label: 'Lose the heat and reach the garage', x: 1400, y: 1400, radius: 100, timer: 130 },
+    ],
+    reward: 1200,
+  },
+  {
+    name: 'Chopper Run',
+    intro: 'Mara Voss: We have a helicopter on the helipad. Fly the cargo over the bay — SBPD cannot catch what flies.',
+    stages: [
+      { label: 'Reach the helipad at Old Harbor', x: 1800, y: 200, radius: 90, timer: 120 },
+      { label: 'Fly the cargo to Sunset Beach', x: 1000, y: 2000, radius: 130, timer: 110 },
+    ],
+    reward: 1600,
+  },
+  {
+    name: 'Debt Collector',
+    intro: 'Mara Voss: A debtor in Palm Court owes us. Collect — politely at first.',
+    stages: [
+      { label: 'Find the debtor in Palm Court', x: 2600, y: 600, radius: 90, timer: 120 },
+      { label: 'Escort him to the meeting point', x: 1800, y: 1400, radius: 100, timer: 120 },
+    ],
+    reward: 1500,
+  },
+  {
+    name: 'Roadblock Breaker',
+    intro: 'Mara Voss: SBPD set up roadblocks all over Calle Ocho. Smash through and show them the road is ours.',
+    stages: [
+      { label: 'Break the first roadblock', x: 1400, y: 1400, radius: 110, timer: 100 },
+      { label: 'Break the second roadblock', x: 2200, y: 1000, radius: 110, timer: 100 },
+      { label: 'Reach the safehouse', x: 600, y: 1400, radius: 90, timer: 120 },
+    ],
+    reward: 2200,
+  },
+  {
+    name: 'The Big Score',
+    intro: 'Mara Voss: The vault truck leaves the North Docks at dawn. This is the one, Rico. Everything rides on it.',
+    stages: [
+      { label: 'Intercept the vault truck', x: 2600, y: 1400, radius: 110, timer: 130 },
+      { label: 'Drive the truck to the hideout', x: 600, y: 600, radius: 110, timer: 150 },
+    ],
+    reward: 4000,
+  },
+  {
+    name: 'Solmar King',
+    intro: 'Mara Voss: One last run and the whole bay is ours. Every cop in Solmar will be on you. Make it count.',
+    stages: [
+      { label: 'Grab the crown shipment at the marina', x: 200, y: 200, radius: 100, timer: 130 },
+      { label: 'Outrun the city to Sunset Beach', x: 2200, y: 2000, radius: 130, timer: 150 },
+    ],
+    reward: 6000,
+  },
+];
+
+export function currentMission(world) {
+  return MISSIONS[Math.min(world.missionIndex, MISSIONS.length - 1)];
 }
 
-export function buildMissions(city) {
-  return [
-    {
-      name: 'First Pickup',
-      intro: 'Rico. Mara here. A package is waiting at the marina. Bring it to me, no detours.',
-      reward: 350,
-      stages: [
-        { type: 'pickup', ...at(city, 2, 2), r: 70, text: 'Pick up the package at the marina' },
-        { type: 'deliver', ...at(city, 5, 4), r: 70, text: 'Deliver the package to Mara' },
-      ],
-    },
-    {
-      name: 'Hot Wheels',
-      intro: 'The boys need a fast car. Lift the coupe on Market Row and park it in my garage.',
-      reward: 500,
-      stages: [
-        { type: 'steal', ...at(city, 7, 5), r: 70, text: 'Steal the coupe on Market Row' },
-        { type: 'deliver', x: city.garage.x, y: city.garage.y, r: 90, text: 'Park it in the garage' },
-      ],
-    },
-    {
-      name: 'Sunset Sprint',
-      intro: 'Street race, Sunset Strip to South Beach. Beat the clock and the pack stays off your tail.',
-      reward: 800,
-      stages: [
-        { type: 'race', ...at(city, 1, 9), r: 80, text: 'Reach the start line', time: 75 },
-        { type: 'race', ...at(city, 5, 11), r: 80, text: 'Checkpoint 1 of 3', time: 75 },
-        { type: 'race', ...at(city, 9, 10), r: 80, text: 'Checkpoint 2 of 3', time: 75 },
-        { type: 'race', ...at(city, 13, 11), r: 80, text: 'Finish at South Beach', time: 75 },
-      ],
-    },
-    {
-      name: 'Dockside Drop',
-      intro: 'The docks are crawling with SBPD. Drop the crate at East Docks and vanish before they box you in.',
-      reward: 650,
-      stages: [
-        { type: 'pickup', ...at(city, 6, 3), r: 70, text: 'Collect the crate downtown' },
-        { type: 'deliver', ...at(city, 14, 6), r: 70, text: 'Drop it at East Docks' },
-      ],
-    },
-    {
-      name: 'Sky Hook',
-      intro: 'Time to fly. Take the chopper from the helipad and land it on the Civic Center roof pad.',
-      reward: 950,
-      stages: [
-        { type: 'heli', x: city.helipad.x, y: city.helipad.y, r: 60, text: 'Board the helicopter at the helipad' },
-        { type: 'heli', ...at(city, 10, 6), r: 90, text: 'Land at the Civic Center pad' },
-      ],
-    },
-    {
-      name: 'Payback Run',
-      intro: 'A rival crew shorted us. Hit their stash house in Little Havana, then lose the heat.',
-      reward: 1100,
-      stages: [
-        { type: 'goto', ...at(city, 4, 10), r: 70, text: 'Reach the stash house' },
-        { type: 'pickup', ...at(city, 4, 10), r: 70, text: 'Grab the stash' },
-        { type: 'deliver', ...at(city, 8, 4), r: 70, text: 'Bring it back to Mara' },
-      ],
-    },
-    {
-      name: 'University Heist',
-      intro: 'One vault, one night, no alarms. Get in, get the haul, get out through Portside.',
-      reward: 1500,
-      stages: [
-        { type: 'goto', ...at(city, 10, 10), r: 70, text: 'Reach the university vault' },
-        { type: 'pickup', ...at(city, 10, 10), r: 70, text: 'Crack the vault' },
-        { type: 'deliver', ...at(city, 2, 6), r: 70, text: 'Escape through Portside' },
-      ],
-    },
-    {
-      name: 'The Big Score',
-      intro: 'Last job, Rico. The North Hills mansion, then we are legends. Everything rides on this.',
-      reward: 2500,
-      stages: [
-        { type: 'goto', ...at(city, 13, 2), r: 80, text: 'Reach the North Hills mansion' },
-        { type: 'pickup', ...at(city, 13, 2), r: 80, text: 'Take the score' },
-        { type: 'race', ...at(city, 8, 8), r: 80, text: 'Lose the tail — checkpoint', time: 90 },
-        { type: 'deliver', ...at(city, 5, 4), r: 80, text: 'Bring it home to Mara', time: 90 },
-      ],
-    },
-  ];
+export function currentStage(world) {
+  const m = currentMission(world);
+  return m.stages[Math.min(world.missionStage, m.stages.length - 1)];
 }
 
-export function createMissionState() {
-  return { index: 0, stage: 0, timer: 0, done: false, failed: false };
+export function missionTarget(world) {
+  const s = currentStage(world);
+  return { x: s.x, y: s.y, radius: s.radius, label: s.label };
 }
 
-export function currentMission(missions, state) {
-  if (state.done || state.index >= missions.length) return null;
-  return missions[state.index];
-}
-
-export function currentStage(missions, state) {
-  const m = currentMission(missions, state);
-  if (!m) return null;
-  return m.stages[state.stage] || null;
-}
-
-export function missionTarget(missions, state) {
-  const stage = currentStage(missions, state);
-  if (!stage) return null;
-  return { x: stage.x, y: stage.y, r: stage.r, text: stage.text, type: stage.type };
-}
-
-// Advance the mission chain. Returns an event string for the message feed
-// ('stage', 'job', 'all-done', 'timeout') or null.
-export function stepMissions(missions, state, player, dt, world) {
-  if (state.done) return null;
-  const mission = currentMission(missions, state);
-  if (!mission) return null;
-  const stage = currentStage(missions, state);
-  if (!stage) return null;
-  if (stage.time) {
-    if (state.timer <= 0) state.timer = stage.time;
-    state.timer -= dt;
-    if (state.timer <= 0) {
-      state.timer = 0;
-      state.failed = true;
-      return 'timeout';
+// Called every step: checks stage arrival, timers, completion, failure.
+export function stepMissions(world, dt) {
+  if (world.missionDone || world.screen !== 'play') return;
+  const m = currentMission(world);
+  const s = currentStage(world);
+  world.missionTimer -= dt;
+  if (world.missionTimer <= 0) {
+    world.missionTimer = s.timer;
+    world.missionStage = 0;
+    world.dialog = {
+      name: 'Mara Voss',
+      text: 'Too slow, Rico. We run it again — the job waits for no one.',
+    };
+    world.message = 'Mission failed — timer ran out. Restarting job.';
+    return;
+  }
+  const dx = world.player.x - s.x;
+  const dy = world.player.y - s.y;
+  if (dx * dx + dy * dy < s.radius * s.radius) {
+    world.missionStage += 1;
+    if (world.missionStage >= m.stages.length) {
+      world.money += m.reward;
+      world.rp += 150;
+      world.message = `Job complete: ${m.name} — +$${m.reward}`;
+      world.dialog = {
+        name: 'Mara Voss',
+        text: `Clean work, Rico. $${m.reward} is yours.`,
+      };
+      world.missionIndex += 1;
+      world.missionStage = 0;
+      if (world.missionIndex >= MISSIONS.length) {
+        world.missionDone = true;
+        world.dialog = {
+          name: 'Mara Voss',
+          text: 'That is every job, Rico. Solmar Bay is yours now.',
+        };
+      } else {
+        const next = currentMission(world);
+        world.missionTimer = next.stages[0].timer;
+        world.dialog = {
+          name: 'Mara Voss',
+          text: next.intro,
+        };
+      }
+    } else {
+      const ns = currentStage(world);
+      world.missionTimer = ns.timer;
+      world.message = `Next: ${ns.label}`;
     }
   }
-  const dx = player.x - stage.x;
-  const dy = player.y - stage.y;
-  const reach = stage.r + (player.inHeli ? 40 : 0);
-  if (dx * dx + dy * dy > reach * reach) return null;
-  if (stage.type === 'steal' && player.onFoot) return null;
-  if (stage.type === 'heli' && state.stage === 0 && !player.inHeli) return null;
-  state.stage += 1;
-  state.timer = 0;
-  if (state.stage >= mission.stages.length) {
-    player.money += mission.reward;
-    player.rp += 120;
-    state.index += 1;
-    state.stage = 0;
-    if (state.index >= missions.length) {
-      state.done = true;
-      return 'all-done';
-    }
-    return 'job';
-  }
-  return 'stage';
 }
 
-export function jobLabel(state) {
-  return `JOB ${Math.min(state.index + 1, 8)}/8`;
+export function startMission(world, index) {
+  world.missionIndex = index;
+  world.missionStage = 0;
+  world.missionDone = false;
+  const m = currentMission(world);
+  world.missionTimer = m.stages[0].timer;
+  world.dialog = { name: 'Mara Voss', text: m.intro };
 }

@@ -1,103 +1,143 @@
-// Solmar Bay — boot, fixed-timestep loop, screen state machine and the
-// screenshot staging hook (?shot=start|play|chase|end&seed=1).
-import { CFG } from './config.js';
-import { createWorld, stepWorld, resetWorld, loadSave, saveGame } from './world.js';
-import { createInput } from './input.js';
+// Solmar Bay — boot, fixed-step loop, screen state machine, input wiring
+// and screenshot staging hooks.
+
+import { CONFIG } from './config.js';
+import { createWorld, resetWorld, stepWorld, saveGame, loadGame, hasSave } from './world.js';
+import { createInput, attachInput, wasPressed } from './input.js';
 import { render } from './render.js';
-import { stageScene } from './shots.js';
-import { unlockAudio, sfxClick } from './audio.js';
+import { stageShot } from './shots.js';
+import { nextStation } from './radio.js';
+import { callCrew } from './crew.js';
+import { ensureAudio, startMusic, stopMusic } from './audio.js';
 
 const canvas = document.getElementById('game');
-const statusEl = document.getElementById('status');
+const statusLine = document.getElementById('status');
 const ctx = canvas.getContext('2d');
 
 const params = new URLSearchParams(window.location.search);
 const seed = Number.parseInt(params.get('seed') || '1', 10) || 1;
 const shot = params.get('shot');
 
-const world = createWorld(seed);
-const input = createInput();
-input.attach(canvas);
-loadSave(world);
+let world;
+if (shot) {
+  world = stageShot(shot, seed);
+} else {
+  world = createWorld(seed);
+  world.hasSave = hasSave();
+  if (world.hasSave) loadGame(world);
+}
+world.viewW = window.innerWidth;
+world.viewH = window.innerHeight;
 
-let view = { w: window.innerWidth, h: window.innerHeight };
+const input = createInput();
+attachInput(input, window);
+window.addEventListener('mousedown', ensureAudio, { once: true });
+window.addEventListener('keydown', ensureAudio, { once: true });
 
 function resize() {
-  const dpr = window.devicePixelRatio || 1;
-  view = { w: window.innerWidth, h: window.innerHeight };
-  canvas.width = Math.round(view.w * dpr);
-  canvas.height = Math.round(view.h * dpr);
-  canvas.style.width = `${view.w}px`;
-  canvas.style.height = `${view.h}px`;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  world.viewW = window.innerWidth;
+  world.viewH = window.innerHeight;
+  canvas.width = Math.floor(world.viewW * dpr);
+  canvas.height = Math.floor(world.viewH * dpr);
+  canvas.style.width = `${world.viewW}px`;
+  canvas.style.height = `${world.viewH}px`;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  input.centerX = view.w / 2;
-  input.centerY = view.h / 2;
 }
 window.addEventListener('resize', resize);
 resize();
 
-function setStatus(text) {
-  if (statusEl) statusEl.textContent = text;
-  document.title = `Solmar Bay — ${text}`;
-}
+let last = performance.now();
+let acc = 0;
 
-window.addEventListener('keydown', () => unlockAudio(world.audio), { once: false });
-canvas.addEventListener('mousedown', () => unlockAudio(world.audio));
+function frame(now) {
+  const elapsed = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  acc += elapsed;
 
-if (shot) {
-  // Staging mode: run the real simulation, render one frame, stop.
-  stageScene(world, shot);
-  render(ctx, world, view);
-  setStatus(`Solmar Bay — ${shot} scene staged (seed ${seed})`);
-  window.__shotReady = true;
-  window.__world = world;
-} else {
-  let last = performance.now();
-  let acc = 0;
-  function frame(now) {
-    const elapsed = Math.min(0.25, (now - last) / 1000);
-    last = now;
-    acc += elapsed;
-    let steps = 0;
+  // Screen state machine + one-shot keys.
+  if (wasPressed(input, 'Enter')) {
     if (world.screen === 'title') {
-      if (input.wasPressed('Enter')) {
-        world.screen = 'play';
-        unlockAudio(world.audio);
-        sfxClick(world.audio);
-        world.showDialog('Mara Voss', world.missions[0].intro, 7);
-        setStatus('Solmar Bay — playing');
-      }
-    } else if (world.screen === 'pause') {
-      if (input.wasPressed('Escape') || input.wasPressed('KeyP')) {
-        world.screen = 'play';
-      }
-    } else if (world.screen === 'end') {
-      if (input.wasPressed('Enter')) {
-        resetWorld(world);
-        setStatus('Solmar Bay — playing');
-      }
+      world.screen = 'play';
+      world.dialogTimer = 8;
+      startMusic(world.radio.station);
+    } else if (world.screen === 'over') {
+      resetWorld(world);
+      world.screen = 'play';
+      startMusic(world.radio.station);
     }
-    while (acc >= CFG.DT && steps < 5) {
-      if (world.screen === 'play' || world.screen === 'title') {
-        stepWorld(world, input, CFG.DT);
-      }
-      input.endStep();
-      acc -= CFG.DT;
-      steps += 1;
-    }
-    if (steps === 5) acc = 0;
-    if (world.screen === 'title') setStatus('Solmar Bay — title screen. Press Enter to start.');
-    if (world.screen === 'pause') setStatus('Solmar Bay — paused. Press Esc to resume.');
-    if (world.screen === 'end') setStatus(`Solmar Bay — ${world.endReason === 'busted' ? 'busted' : 'wasted'}. Press Enter to play again.`);
-    render(ctx, world, view);
-    requestAnimationFrame(frame);
   }
-  setStatus('Solmar Bay — title screen. Press Enter to start.');
-  window.__world = world;
+  if (wasPressed(input, 'Escape') || wasPressed(input, 'KeyP')) {
+    if (world.screen === 'play') {
+      world.screen = 'pause';
+      saveGame(world);
+    } else if (world.screen === 'pause') {
+      world.screen = 'play';
+    }
+  }
+  if (world.screen === 'play') {
+    if (wasPressed(input, 'KeyQ')) {
+      nextStation(world.radio);
+      startMusic(world.radio.station);
+      world.message = `Radio: ${world.radio.station + 1} — ${world.radio.station === 0 ? 'SOLMAR FM' : world.radio.station === 1 ? 'BAY 104' : world.radio.station === 2 ? 'VOSS TALK' : 'PALM ROCK'}`;
+      world.messageTimer = 3;
+    }
+    if (wasPressed(input, 'Digit1')) callCrew(world, 0);
+    if (wasPressed(input, 'Digit2')) callCrew(world, 1);
+    if (wasPressed(input, 'Digit3')) callCrew(world, 2);
+    if (wasPressed(input, 'KeyF')) {
+      world.combat.slot = (world.combat.slot + 1) % 3;
+      world.message = `Weapon: ${['Fists', 'Pistol', 'SMG'][world.combat.slot]}`;
+      world.messageTimer = 2;
+    }
+    if (wasPressed(input, 'KeyM')) {
+      world.radio.on = !world.radio.on;
+      if (world.radio.on) startMusic(world.radio.station);
+      else stopMusic();
+    }
+    if (wasPressed(input, 'KeyC')) saveGame(world);
+  }
+
+  // Edge-triggered action key (E): consumed once per step.
+  const frameInput = { ...input, action: wasPressed(input, 'KeyE') };
+  world.aim = { x: input.mouseX, y: input.mouseY };
+
+  // Busted check: caught on foot at high wanted with police touching.
+  if (world.screen === 'play' && world.wanted >= 4 && world.player.onFoot && !world.playerHeli) {
+    const near = world.cars.some((c) => {
+      if (c.kind !== 'police') return false;
+      const dx = c.x - world.player.x;
+      const dy = c.y - world.player.y;
+      return dx * dx + dy * dy < 40 * 40;
+    });
+    if (near) {
+      world.screen = 'over';
+      world.overKind = 'busted';
+      stopMusic();
+    }
+  }
+
+  while (acc >= CONFIG.DT) {
+    stepWorld(world, frameInput, CONFIG.DT);
+    frameInput.action = false;
+    acc -= CONFIG.DT;
+  }
+
+  render(ctx, world, world.viewW, world.viewH);
+  if (statusLine) {
+    statusLine.textContent = `Solmar Bay — ${world.screen} — $${world.money} — wanted ${world.wanted} — job ${Math.min(world.missionIndex + 1, 8)}/8`;
+  }
   requestAnimationFrame(frame);
 }
 
-// Save when the tab closes mid-game.
-window.addEventListener('beforeunload', () => {
-  if (world.screen === 'play') saveGame(world);
-});
+if (shot) {
+  // Staging: one render, then signal the driver.
+  render(ctx, world, world.viewW, world.viewH);
+  if (statusLine) {
+    statusLine.textContent = `Solmar Bay — ${world.screen} — $${world.money} — wanted ${world.wanted} — job ${Math.min(world.missionIndex + 1, 8)}/8`;
+  }
+  window.__shotReady = true;
+  window.__shotWorld = world;
+} else {
+  requestAnimationFrame(frame);
+}

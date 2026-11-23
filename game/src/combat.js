@@ -1,113 +1,92 @@
-// Combat. Three weapon slots — fists, pistol, SMG — with ammo, bullets that
-// fly in straight lines, and player health + armour. Bullets stop at
-// buildings and at the end of their range.
-import { CFG } from './config.js';
-import { pointBlocked } from './city.js';
+// Combat: three weapon slots, ammo, bullets, health and armor.
+
+export const WEAPONS = [
+  { name: 'Fists', damage: 12, rate: 0.35, range: 420, ammo: Infinity, auto: false },
+  { name: 'Pistol', damage: 26, rate: 0.28, range: 700, ammo: 60, auto: false },
+  { name: 'SMG', damage: 14, rate: 0.09, range: 620, ammo: 120, auto: true },
+];
 
 export function createCombat() {
   return {
-    slot: 0,
-    weapons: [
-      { name: 'Fists', ammo: Infinity, damage: 12, rate: 0.35, cooldown: 0 },
-      { name: 'Pistol', ammo: 36, damage: 26, rate: 0.28, cooldown: 0 },
-      { name: 'SMG', ammo: 120, damage: 14, rate: 0.09, cooldown: 0 },
-    ],
-    bullets: [],
+    slot: 1, // start on the pistol
+    ammo: [Infinity, 60, 120],
+    cooldown: 0,
+    shotsFired: 0,
   };
 }
 
 export function currentWeapon(combat) {
-  return combat.weapons[combat.slot];
+  return WEAPONS[combat.slot];
 }
 
-export function cycleWeapon(combat) {
-  combat.slot = (combat.slot + 1) % combat.weapons.length;
-}
-
-export function tryShoot(combat, x, y, angle) {
-  const w = currentWeapon(combat);
-  if (w.cooldown > 0) return false;
-  if (w.name === 'Fists') {
-    w.cooldown = w.rate;
-    combat.bullets.push({
-      melee: true,
-      x: x + Math.cos(angle) * 26,
-      y: y + Math.sin(angle) * 26,
-      vx: 0, vy: 0,
-      life: 0.12,
-      damage: w.damage,
-    });
-    return true;
+// Fire toward (tx, ty) in world space. Returns true when a shot went out.
+export function tryShoot(world, tx, ty) {
+  const c = world.combat;
+  const w = currentWeapon(c);
+  if (c.cooldown > 0) return false;
+  if (c.ammo[c.slot] <= 0) {
+    world.message = `${w.name} is empty — pick another slot (1/2/3)`;
+    c.cooldown = 0.3;
+    return false;
   }
-  if (w.ammo <= 0) return false;
-  w.ammo -= 1;
-  w.cooldown = w.rate;
-  combat.bullets.push({
-    melee: false,
-    x: x + Math.cos(angle) * 22,
-    y: y + Math.sin(angle) * 22,
-    vx: Math.cos(angle) * CFG.BULLET_SPEED,
-    vy: Math.sin(angle) * CFG.BULLET_SPEED,
-    life: CFG.BULLET_RANGE / CFG.BULLET_SPEED,
+  const p = world.player;
+  const angle = Math.atan2(ty - p.y, tx - p.x);
+  world.bullets.push({
+    x: p.x + Math.cos(angle) * 22,
+    y: p.y + Math.sin(angle) * 22,
+    angle,
+    speed: 900,
+    life: w.range / 900,
     damage: w.damage,
+    fromPlayer: true,
   });
+  if (c.ammo[c.slot] !== Infinity) c.ammo[c.slot] -= 1;
+  c.cooldown = w.rate;
+  c.shotsFired += 1;
+  world.shotsFired += 1;
   return true;
 }
 
-function hitTest(list, bx, by, radius) {
-  for (const t of list) {
-    const dx = t.x - bx;
-    const dy = t.y - by;
-    if (dx * dx + dy * dy < radius * radius) return t;
-  }
-  return null;
-}
-
-export function stepBullets(combat, world, dt) {
-  for (const w of combat.weapons) {
-    if (w.cooldown > 0) w.cooldown -= dt;
-  }
-  const keep = [];
-  for (const b of combat.bullets) {
+export function stepBullets(world, dt) {
+  for (const b of world.bullets) {
+    b.x += Math.cos(b.angle) * b.speed * dt;
+    b.y += Math.sin(b.angle) * b.speed * dt;
     b.life -= dt;
-    if (b.life <= 0) continue;
-    if (!b.melee) {
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      if (b.x < 0 || b.x > CFG.WORLD_W || b.y < 0 || b.y > CFG.WORLD_H) continue;
-      if (pointBlocked(world.city, b.x, b.y, 0)) continue;
-    }
-    const ped = hitTest(world.peds, b.x, b.y, 12);
-    if (ped) {
-      ped.flee = 3;
-      world.player.wanted = Math.min(CFG.WANTED_MAX, world.player.wanted + 1);
-      world.player.crimeTimer = CFG.CRIME_MEMORY;
-      continue;
-    }
-    const cop = hitTest(world.police.units, b.x, b.y, 20);
-    if (cop) {
-      cop.speed = Math.max(0, cop.speed - 120);
-      world.player.wanted = Math.min(CFG.WANTED_MAX, world.player.wanted + 1);
-      world.player.crimeTimer = CFG.CRIME_MEMORY;
-      continue;
-    }
-    const car = hitTest(world.cars, b.x, b.y, 22);
-    if (car && car !== world.player.car) {
-      car.condition = Math.max(0, (car.condition || 80) - b.damage / 4);
-      continue;
-    }
-    keep.push(b);
   }
-  combat.bullets = keep;
+  world.bullets = world.bullets.filter((b) => b.life > 0);
+  // Player bullets can hit police cars and peds.
+  for (const b of world.bullets) {
+    if (!b.fromPlayer) continue;
+    for (const car of world.cars) {
+      if (car.kind !== 'police') continue;
+      const dx = car.x - b.x;
+      const dy = car.y - b.y;
+      if (dx * dx + dy * dy < 26 * 26) {
+        car.cond -= b.damage;
+        b.life = 0;
+        if (car.cond <= 0) {
+          car.kind = 'wreck';
+          world.rp += 25;
+          world.message = 'Police unit disabled — +25 RP';
+        }
+      }
+    }
+  }
+  world.bullets = world.bullets.filter((b) => b.life > 0);
 }
 
-// Damage the player: armour absorbs first, then health.
-export function damagePlayer(player, amount) {
+export function damagePlayer(world, amount) {
+  const p = world.player;
   let left = amount;
-  if (player.armor > 0) {
-    const absorbed = Math.min(player.armor, left);
-    player.armor -= absorbed;
+  if (p.armor > 0) {
+    const absorbed = Math.min(p.armor, left);
+    p.armor -= absorbed;
     left -= absorbed;
   }
-  player.hp = Math.max(0, player.hp - left);
+  p.hp -= left;
+  if (p.hp <= 0) {
+    p.hp = 0;
+    world.screen = 'over';
+    world.overKind = 'wasted';
+  }
 }

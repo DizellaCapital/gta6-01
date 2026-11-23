@@ -3,20 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Bay</title>
+<title>Solmar Bay — Make GTA 6</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #10151b; }
-  #game { display: block; width: 100vw; height: 100vh; }
-  #status {
-    position: fixed; left: 8px; bottom: 6px; z-index: 5;
-    color: rgba(255,255,255,0.55); font: 11px sans-serif;
-    pointer-events: none;
-  }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0c1018; }
+  #game { display: block; }
+  #status { position: fixed; left: 8px; bottom: 4px; color: #9fb3c8; font: 12px sans-serif; opacity: 0.7; pointer-events: none; }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
-<div id="status" role="status" aria-live="polite">Solmar Bay — loading…</div>
+<div id="status" role="status">Solmar Bay loading…</div>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

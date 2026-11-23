@@ -1,132 +1,92 @@
-// WebAudio sound: engine hum, sirens, gunshots, pickups and the radio music
-// engine. Nothing here creates an AudioContext until unlockAudio() is called
-// from a real user gesture — headless staging never touches audio, so the
-// console stays silent.
-export function createAudio() {
-  return {
-    ctx: null,
-    unlocked: false,
-    master: null,
-    musicTimer: null,
-    musicStep: 0,
-    station: 0,
-    engineOsc: null,
-    engineGain: null,
-  };
-}
+// Sound: WebAudio synth for effects and radio music. Everything is
+// guarded — if audio is unavailable (headless, no gesture yet) the game
+// simply stays silent instead of throwing.
 
-export function unlockAudio(audio) {
-  if (audio.unlocked) return;
+let ctx = null;
+let musicNodes = null;
+
+function getCtx() {
+  if (ctx) return ctx;
   try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    audio.ctx = new Ctx();
-    audio.master = audio.ctx.createGain();
-    audio.master.gain.value = 0.5;
-    audio.master.connect(audio.ctx.destination);
-    audio.unlocked = true;
-  } catch (err) {
-    // Audio is decoration; a failure here must never break the game.
-    audio.unlocked = false;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    ctx = new AC();
+    return ctx;
+  } catch {
+    return null;
   }
 }
 
-function blip(audio, freq, dur, type, vol, slideTo) {
-  if (!audio.unlocked || !audio.ctx) return;
-  try {
-    const t = audio.ctx.currentTime;
-    const osc = audio.ctx.createOscillator();
-    const gain = audio.ctx.createGain();
-    osc.type = type || 'square';
-    osc.frequency.setValueAtTime(freq, t);
-    if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
-    gain.gain.setValueAtTime(vol || 0.12, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    osc.connect(gain);
-    gain.connect(audio.master);
-    osc.start(t);
-    osc.stop(t + dur);
-  } catch (err) {
-    // ignore
+export function ensureAudio() {
+  const c = getCtx();
+  if (c && c.state === 'suspended') {
+    c.resume().catch(() => {});
   }
+  return c;
 }
 
-export function sfxShot(audio) {
-  blip(audio, 180, 0.12, 'square', 0.2, 60);
+function blip(freq, dur, type = 'sine', gain = 0.08) {
+  const c = getCtx();
+  if (!c) return;
+  try {
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(gain, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur);
+    o.connect(g).connect(c.destination);
+    o.start();
+    o.stop(c.currentTime + dur);
+  } catch { /* silent */ }
 }
 
-export function sfxPickup(audio) {
-  blip(audio, 660, 0.1, 'sine', 0.16);
-  setTimeout(() => blip(audio, 990, 0.14, 'sine', 0.16), 90);
+export function sfxPickup() { blip(880, 0.12, 'sine', 0.06); }
+export function sfxShoot() { blip(220, 0.08, 'square', 0.05); }
+export function sfxCrash() { blip(90, 0.25, 'sawtooth', 0.09); }
+export function sfxSiren() { blip(660, 0.18, 'triangle', 0.03); }
+export function sfxMission() {
+  blip(523, 0.12, 'sine', 0.07);
+  setTimeout(() => blip(784, 0.18, 'sine', 0.07), 120);
 }
 
-export function sfxClick(audio) {
-  blip(audio, 440, 0.06, 'sine', 0.1);
-}
-
-export function sfxSiren(audio) {
-  if (!audio.unlocked) return;
-  blip(audio, 700, 0.5, 'sine', 0.05, 950);
-}
-
-// A tiny step sequencer for the radio: a bass note plus a lead note per
-// eighth-note step, with a different scale per station.
-const SCALES = [
-  [0, 3, 5, 7, 10],
-  [0, 2, 3, 7, 9],
-  [0, 2, 5, 7, 9],
-  [0, 4, 5, 7, 11],
+// A tiny looping music bed per station: different waveform + tempo.
+// Only one bed runs at a time; switching stations restarts it.
+const STATION_SOUND = [
+  { type: 'sine', notes: [262, 330, 392, 523], step: 0.42 },
+  { type: 'square', notes: [196, 247, 294, 370], step: 0.30 },
+  { type: 'triangle', notes: [220, 277, 330, 440], step: 0.55 },
+  { type: 'sawtooth', notes: [175, 220, 262, 330], step: 0.26 },
 ];
 
-export function startRadio(audio, station) {
-  if (!audio.unlocked || audio.musicTimer) return;
-  audio.station = station;
-  audio.musicStep = 0;
-  const scale = SCALES[station % SCALES.length];
-  const base = 110;
-  audio.musicTimer = setInterval(() => {
-    if (!audio.unlocked || !audio.ctx) return;
-    const step = audio.musicStep;
-    audio.musicStep += 1;
-    const note = scale[step % scale.length];
-    const octave = step % 8 === 0 ? 2 : 1;
-    const freq = base * Math.pow(2, note / 12) * octave;
-    blip(audio, freq, 0.22, 'triangle', 0.07);
-    if (step % 2 === 0) blip(audio, base / 2, 0.24, 'sine', 0.1);
-  }, 240);
-}
-
-export function stopRadio(audio) {
-  if (audio.musicTimer) {
-    clearInterval(audio.musicTimer);
-    audio.musicTimer = null;
-  }
-}
-
-export function setEngine(audio, on, speedRatio) {
-  if (!audio.unlocked || !audio.ctx) return;
+export function startMusic(stationIndex) {
+  stopMusic();
+  const c = getCtx();
+  if (!c) return;
+  const spec = STATION_SOUND[stationIndex % STATION_SOUND.length];
   try {
-    if (on && !audio.engineOsc) {
-      const osc = audio.ctx.createOscillator();
-      const gain = audio.ctx.createGain();
-      osc.type = 'sawtooth';
-      osc.frequency.value = 70;
-      gain.gain.value = 0.03;
-      osc.connect(gain);
-      gain.connect(audio.master);
-      osc.start();
-      audio.engineOsc = osc;
-      audio.engineGain = gain;
-    }
-    if (!on && audio.engineOsc) {
-      audio.engineOsc.stop();
-      audio.engineOsc = null;
-      audio.engineGain = null;
-    }
-    if (audio.engineOsc) {
-      audio.engineOsc.frequency.value = 60 + speedRatio * 140;
-    }
-  } catch (err) {
-    // ignore
-  }
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = spec.type;
+    g.gain.value = 0.035;
+    o.connect(g).connect(c.destination);
+    o.start();
+    let i = 0;
+    const timer = setInterval(() => {
+      try {
+        o.frequency.setValueAtTime(spec.notes[i % spec.notes.length], c.currentTime);
+      } catch { /* silent */ }
+      i += 1;
+    }, spec.step * 1000);
+    musicNodes = { o, g, timer };
+  } catch { /* silent */ }
+}
+
+export function stopMusic() {
+  if (!musicNodes) return;
+  try {
+    clearInterval(musicNodes.timer);
+    musicNodes.o.stop();
+  } catch { /* silent */ }
+  musicNodes = null;
 }

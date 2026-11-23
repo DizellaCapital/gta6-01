@@ -1,130 +1,127 @@
-// Solmar Bay's street grid, blocks and buildings. Roads run on a regular
-// grid; every block between four roads holds at most one building (some
-// blocks stay parks). All geometry is derived from the seed, never from
-// hand-placed coordinates, so the city is identical for a given seed.
-import { CFG } from './config.js';
+// Solmar Bay city layout: a road grid, blocks between roads, buildings
+// inside the blocks, plus collision and road-snapping helpers.
 
-export function roadLines(count, size) {
-  const lines = [];
-  for (let i = 0; i <= count; i += 1) lines.push(i * CFG.GRID);
-  // clamp the last line inside the world so roads never sit on the border
-  lines[lines.length - 1] = size - CFG.GRID / 2;
-  return lines;
-}
+import { CONFIG } from './config.js';
+import { makeRng, range, rangeInt, pick } from './random.js';
 
-export function buildCity(rng) {
-  const roadsX = roadLines(Math.floor(CFG.WORLD_W / CFG.GRID), CFG.WORLD_W);
-  const roadsY = roadLines(Math.floor(CFG.WORLD_H / CFG.GRID), CFG.WORLD_H);
+const ROOF_COLORS = ['#7a5c40', '#6b4f38', '#8a6a4d', '#5f6b7a', '#75604e'];
+
+export function buildCity(seed) {
+  const rng = makeRng(seed * 7919 + 13);
+  const spacing = CONFIG.ROAD_SPACING;
+  const roadsX = [];
+  const roadsY = [];
+  for (let x = spacing / 2; x < CONFIG.WORLD_W; x += spacing) roadsX.push(x);
+  for (let y = spacing / 2; y < CONFIG.WORLD_H; y += spacing) roadsY.push(y);
+
   const buildings = [];
-  const parks = [];
-  const roofColors = [
-    CFG.PALETTE.buildingRoof,
-    CFG.PALETTE.buildingRoof2,
-    CFG.PALETTE.buildingRoof3,
-    CFG.PALETTE.buildingRoof4,
-  ];
-  for (let ix = 0; ix < roadsX.length - 1; ix += 1) {
-    for (let iy = 0; iy < roadsY.length - 1; iy += 1) {
-      const x0 = roadsX[ix] + CFG.ROAD_W / 2 + 12;
-      const x1 = roadsX[ix + 1] - CFG.ROAD_W / 2 - 12;
-      const y0 = roadsY[iy] + CFG.ROAD_W / 2 + 12;
-      const y1 = roadsY[iy + 1] - CFG.ROAD_W / 2 - 12;
-      if (x1 - x0 < 56 || y1 - y0 < 56) continue;
-      if (rng.chance(0.16)) {
-        parks.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
-        continue;
+  // One block = the square between four neighbouring roads.
+  for (let i = 0; i < roadsX.length - 1; i++) {
+    for (let j = 0; j < roadsY.length - 1; j++) {
+      const bx0 = roadsX[i] + CONFIG.ROAD_W / 2 + 26;
+      const by0 = roadsY[j] + CONFIG.ROAD_W / 2 + 26;
+      const bx1 = roadsX[i + 1] - CONFIG.ROAD_W / 2 - 26;
+      const by1 = roadsY[j + 1] - CONFIG.ROAD_W / 2 - 26;
+      // The south edge of the map is the beach; leave it open.
+      if (by1 > CONFIG.WORLD_H - 260) continue;
+      // A couple of blocks stay parks.
+      if ((i * 7 + j * 3) % 9 === 4) continue;
+      const count = rangeInt(rng, 1, 2);
+      for (let k = 0; k < count; k++) {
+        const w = range(rng, 110, 190);
+        const h = range(rng, 90, 170);
+        const x = count === 1
+          ? bx0 + (bx1 - bx0 - w) / 2
+          : bx0 + (k * (bx1 - bx0 - w)) / Math.max(1, count - 1);
+        const y = by0 + range(rng, 0, Math.max(0, by1 - by0 - h));
+        buildings.push({
+          x, y, w, h,
+          roof: pick(rng, ROOF_COLORS),
+          floors: rangeInt(rng, 1, 6),
+        });
       }
-      const w = rng.range(60, x1 - x0);
-      const h = rng.range(60, y1 - y0);
-      const x = x0 + rng.range(0, x1 - x0 - w);
-      const y = y0 + rng.range(0, y1 - y0 - h);
-      buildings.push({
-        x, y, w, h,
-        color: rng.pick(roofColors),
-        tall: rng.chance(0.3),
-      });
     }
   }
-  // The helipad sits in a park block near the marina; the garage sits on a
-  // road corner in the south of town. Both are picked from real geometry.
-  const padPark = parks.length > 0 ? parks[Math.floor(parks.length / 2)] : null;
-  const helipad = padPark
-    ? { x: padPark.x + padPark.w / 2, y: padPark.y + padPark.h / 2, r: 42 }
-    : { x: CFG.WORLD_W / 2, y: CFG.WORLD_H / 2, r: 42 };
-  const garage = {
-    x: roadsX[3],
-    y: roadsY[roadsY.length - 2],
-    w: 120,
-    h: 84,
-  };
-  return { roadsX, roadsY, buildings, parks, helipad, garage };
+  return { roadsX, roadsY, buildings, seed };
 }
 
-export function pointBlocked(city, x, y, pad = 0) {
+// True when point (x, y) with radius r overlaps any building.
+export function pointInBuilding(city, x, y, r = 0) {
   for (const b of city.buildings) {
-    if (x > b.x - pad && x < b.x + b.w + pad && y > b.y - pad && y < b.y + b.h + pad) {
-      return true;
+    if (x + r > b.x && x - r < b.x + b.w && y + r > b.y && y - r < b.y + b.h) {
+      return b;
     }
   }
+  return null;
+}
+
+// Snap a point to the centreline of the nearest road.
+export function nearestRoadPoint(city, x, y) {
+  let nx = city.roadsX[0];
+  let nd = Infinity;
+  for (const rx of city.roadsX) {
+    const d = Math.abs(rx - x);
+    if (d < nd) { nd = d; nx = rx; }
+  }
+  let ny = city.roadsY[0];
+  nd = Infinity;
+  for (const ry of city.roadsY) {
+    const d = Math.abs(ry - y);
+    if (d < nd) { nd = d; ny = ry; }
+  }
+  // Snap to whichever road axis is closer.
+  if (Math.abs(nx - x) <= Math.abs(ny - y)) return { x: nx, y, axis: 'v' };
+  return { x, y: ny, axis: 'h' };
+}
+
+// Is the point on a road surface (including the sidewalk edge)?
+export function onRoad(city, x, y) {
+  const half = CONFIG.ROAD_W / 2 + CONFIG.SIDEWALK;
+  for (const rx of city.roadsX) if (Math.abs(x - rx) <= half) return true;
+  for (const ry of city.roadsY) if (Math.abs(y - ry) <= half) return true;
   return false;
 }
 
-export function nearestRoadX(city, x) {
-  let best = city.roadsX[0];
-  let bestD = Infinity;
-  for (const rx of city.roadsX) {
-    const d = Math.abs(rx - x);
-    if (d < bestD) { bestD = d; best = rx; }
-  }
-  return { value: best, dist: bestD };
+// Which road axes pass under the point: 'v', 'h', 'both' or 'none'.
+export function roadAxisAt(city, x, y) {
+  const half = CONFIG.ROAD_W / 2;
+  let v = false;
+  let h = false;
+  for (const rx of city.roadsX) if (Math.abs(x - rx) <= half) v = true;
+  for (const ry of city.roadsY) if (Math.abs(y - ry) <= half) h = true;
+  if (v && h) return 'both';
+  if (v) return 'v';
+  if (h) return 'h';
+  return 'none';
 }
 
-export function nearestRoadY(city, y) {
-  let best = city.roadsY[0];
-  let bestD = Infinity;
-  for (const ry of city.roadsY) {
-    const d = Math.abs(ry - y);
-    if (d < bestD) { bestD = d; best = ry; }
-  }
-  return { value: best, dist: bestD };
-}
-
-// Snap a point to the closest point on any road centre line.
-export function nearestRoadPoint(city, x, y) {
-  const nx = nearestRoadX(city, x);
-  const ny = nearestRoadY(city, y);
-  if (nx.dist <= ny.dist) return { x: nx.value, y, axis: 'v' };
-  return { x, y: ny.value, axis: 'h' };
-}
-
-export function onRoad(city, x, y) {
-  const nx = nearestRoadX(city, x);
-  const ny = nearestRoadY(city, y);
-  return nx.dist <= CFG.ROAD_W / 2 || ny.dist <= CFG.ROAD_W / 2;
-}
-
-// A random point on a road centre line, away from the given point.
-export function randomRoadPoint(city, rng, awayFrom, minDist = 300) {
-  for (let tries = 0; tries < 40; tries += 1) {
-    const horizontal = rng.chance(0.5);
-    let x;
-    let y;
-    if (horizontal) {
-      y = rng.pick(city.roadsY);
-      x = rng.range(CFG.GRID, CFG.WORLD_W - CFG.GRID);
-    } else {
-      x = rng.pick(city.roadsX);
-      y = rng.range(CFG.GRID, CFG.WORLD_H - CFG.GRID);
-    }
-    if (awayFrom && Math.hypot(x - awayFrom.x, y - awayFrom.y) < minDist) continue;
-    return { x, y };
-  }
-  return { x: city.roadsX[2], y: city.roadsY[2] };
-}
-
-// The intersection (road crossing) closest to a point.
+// Nearest intersection to a point.
 export function nearestIntersection(city, x, y) {
-  const nx = nearestRoadX(city, x);
-  const ny = nearestRoadY(city, y);
-  return { x: nx.value, y: ny.value };
+  const p = nearestRoadPoint(city, x, y);
+  let ix = city.roadsX[0];
+  let d = Infinity;
+  for (const rx of city.roadsX) {
+    if (Math.abs(rx - p.x) < d) { d = Math.abs(rx - p.x); ix = rx; }
+  }
+  let iy = city.roadsY[0];
+  d = Infinity;
+  for (const ry of city.roadsY) {
+    if (Math.abs(ry - p.y) < d) { d = Math.abs(ry - p.y); iy = ry; }
+  }
+  return { x: ix, y: iy };
+}
+
+// A random point on a road, away from buildings.
+export function randomRoadPoint(city, rng) {
+  const axis = rng() < 0.5 ? 'v' : 'h';
+  if (axis === 'v') {
+    return {
+      x: pick(rng, city.roadsX),
+      y: range(rng, 80, CONFIG.WORLD_H - 80),
+    };
+  }
+  return {
+    x: range(rng, 80, CONFIG.WORLD_W - 80),
+    y: pick(rng, city.roadsY),
+  };
 }
