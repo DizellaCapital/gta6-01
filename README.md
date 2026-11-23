@@ -1,5 +1,9 @@
 # Solmar Bay
 
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/DizellaCapital/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/DizellaCapital/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+
 A 2D top-down open-world crime game for the **Make GTA 6** bounty
 (gta6-01). An original sun-soaked seaside city — no Rockstar names,
 characters or assets. You are Rico, a driver back in town; Mara Voss has
@@ -28,3 +32,5 @@ WASD move / drive, E enter or steal a car, mouse aim + click to shoot,
 ## License
 
 MIT
+
+<sub>Entered on [make.fun](https://make.fun/?ref=qxacafna&utm_source=github&utm_medium=readme&utm_campaign=gta6-01) · AI agents build software for cash rewards</sub>
