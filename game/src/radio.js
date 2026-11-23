@@ -1,38 +1,52 @@
-// Four radio stations. The HUD shows the station name and the current track;
-// the audio engine synthesises a different groove per station.
+// Radio. Four stations, each with a name, a flavour line and a rotating
+// playlist of song titles. The audio module turns the current station into
+// synthesized WebAudio music; this module only owns the schedule.
 export const STATIONS = [
-  { name: 'SOLMAR FM 88.1', genre: 'Sunset Pop', tracks: ['Palm Shadows — The Coastals', 'Neon Tide — Marina Blue', 'Golden Hour — Rico & The Palms'] },
-  { name: 'BAY BEATS 94.6', genre: 'Hip-Hop', tracks: ['Corner King — Voss', 'Run The Block — DJ Ferry', 'Lowrider Nights — Sol Mar'] },
-  { name: 'VICE ROCK 101.3', genre: 'Rock', tracks: ['Highway Heat — Asphalt', 'Chrome Hearts — The Getaways', 'Redline — Midnight Mile'] },
-  { name: 'TALK BAY 107.9', genre: 'Talk / News', tracks: ['SBPD Scanner — Live', 'Bay Talk with Mara', 'Traffic & Weather — Hourly'] },
+  {
+    name: 'SOLMAR FM',
+    tag: 'Top 40 · sun-soaked hits',
+    songs: ['Neon Tide — Midnight Drive', 'Palma — Golden Hour', 'The Breakers — Salt Air'],
+  },
+  {
+    name: 'BAY 97',
+    tag: 'Hip-hop · street anthems',
+    songs: ['Kilo — Corner Store', 'Voss — Crown Money', 'Dre Low — Bay Nights'],
+  },
+  {
+    name: 'VICE WAVE',
+    tag: 'Synthwave · night drive',
+    songs: ['Laserhawk — Chrome Sunset', 'Nightride — Vector', 'Glass Tiger — After Dark'],
+  },
+  {
+    name: 'TALK 1010',
+    tag: 'Talk · Solmar Bay news',
+    songs: ['The Morning Tide — headlines', 'Bay Talk — callers on the heist', 'Sports Desk — Sharks vs Suns'],
+  },
 ];
 
 export function createRadio() {
-  return { station: 0, track: 0, trackTime: 0 };
+  return { station: 0, song: 0, songTime: 0, songLen: 24 };
 }
 
 export function currentStation(radio) {
   return STATIONS[radio.station];
 }
 
-export function currentTrack(radio) {
-  const s = STATIONS[radio.station];
-  return s.tracks[radio.track % s.tracks.length];
+export function currentSong(radio) {
+  const st = currentStation(radio);
+  return st.songs[radio.song % st.songs.length];
 }
 
 export function nextStation(radio) {
   radio.station = (radio.station + 1) % STATIONS.length;
-  radio.track = 0;
-  radio.trackTime = 0;
-  return currentStation(radio);
+  radio.song = 0;
+  radio.songTime = 0;
 }
 
-export function tickRadio(radio, dt) {
-  radio.trackTime += dt;
-  const s = STATIONS[radio.station];
-  const len = s.genre === 'Talk / News' ? 45 : 150;
-  if (radio.trackTime > len) {
-    radio.trackTime = 0;
-    radio.track = (radio.track + 1) % s.tracks.length;
+export function stepRadio(radio, dt) {
+  radio.songTime += dt;
+  if (radio.songTime >= radio.songLen) {
+    radio.songTime = 0;
+    radio.song += 1;
   }
 }

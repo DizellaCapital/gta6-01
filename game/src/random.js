@@ -1,6 +1,7 @@
-// Seeded deterministic random numbers (mulberry32). Same seed -> same stream,
-// so a staged screenshot seed always reproduces the same frame.
-export function makeRng(seed) {
+// Deterministic seeded random numbers. The same seed always yields the same
+// sequence, so the same seed always yields the same city and the same
+// screenshot frames. Based on the mulberry32 generator.
+export function mulberry32(seed) {
   let a = seed >>> 0;
   return function next() {
     a |= 0;
@@ -11,18 +12,22 @@ export function makeRng(seed) {
   };
 }
 
-export function pick(rng, arr) {
-  return arr[Math.floor(rng() * arr.length)];
-}
-
-export function range(rng, lo, hi) {
-  return lo + rng() * (hi - lo);
-}
-
-export function intRange(rng, lo, hi) {
-  return lo + Math.floor(rng() * (hi - lo + 1));
-}
-
-export function chance(rng, p) {
-  return rng() < p;
+export function makeRng(seed) {
+  const next = mulberry32(seed);
+  return {
+    next,
+    range(min, max) {
+      return min + next() * (max - min);
+    },
+    int(min, max) {
+      // inclusive on both ends
+      return min + Math.floor(next() * (max - min + 1));
+    },
+    pick(list) {
+      return list[Math.floor(next() * list.length)];
+    },
+    chance(p) {
+      return next() < p;
+    },
+  };
 }

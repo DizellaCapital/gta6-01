@@ -1,50 +1,63 @@
-// Pedestrians stroll the sidewalks, pause at corners, and run when gunfire
-// or a high wanted level turns the street dangerous.
+// Pedestrians. They stroll along the sidewalks (a fixed offset from the road
+// centre line), pause now and then, and pick a new direction at crossings.
 import { CFG } from './config.js';
-import { isBlocked, nearestRoadPoint } from './city.js';
-import { pick, chance, range } from './random.js';
+import { nearestRoadX, nearestRoadY } from './city.js';
 
-export function updatePeds(world, dt) {
-  const { city, rng } = world;
-  for (const p of world.peds) {
-    p.think -= dt;
-    const danger = world.wanted >= 3 || world.recentShot > world.time - 2;
-    if (p.think <= 0) {
-      p.think = range(rng, 1.5, 4);
-      if (danger) {
-        // Flee away from the player.
-        const a = Math.atan2(p.y - world.player.y, p.x - world.player.x) + range(rng, -0.6, 0.6);
-        p.dirX = Math.cos(a); p.dirY = Math.sin(a);
-        p.speed = 150;
-      } else if (chance(rng, 0.25)) {
-        p.dirX = 0; p.dirY = 0; p.speed = 0; // idle
+const SIDEWALK = CFG.ROAD_W / 2 + 10;
+
+export function makePed(city, rng) {
+  const horizontal = rng.chance(0.5);
+  let x;
+  let y;
+  let axis;
+  let dir;
+  if (horizontal) {
+    y = rng.pick(city.roadsY) + (rng.chance(0.5) ? SIDEWALK : -SIDEWALK);
+    x = rng.range(CFG.GRID, CFG.WORLD_W - CFG.GRID);
+    axis = 'h';
+    dir = rng.chance(0.5) ? 1 : -1;
+  } else {
+    x = rng.pick(city.roadsX) + (rng.chance(0.5) ? SIDEWALK : -SIDEWALK);
+    y = rng.range(CFG.GRID, CFG.WORLD_H - CFG.GRID);
+    axis = 'v';
+    dir = rng.chance(0.5) ? 1 : -1;
+  }
+  return {
+    x, y, axis, dir,
+    speed: rng.range(28, 62),
+    pause: rng.range(0, 2),
+    color: rng.pick(CFG.PED_COLORS),
+    shirt: rng.pick(CFG.SHIRT_COLORS),
+    r: 5,
+  };
+}
+
+export function stepPeds(city, peds, dt, rng) {
+  for (const p of peds) {
+    if (p.pause > 0) {
+      p.pause -= dt;
+      continue;
+    }
+    p.x += p.axis === 'h' ? p.dir * p.speed * dt : 0;
+    p.y += p.axis === 'v' ? p.dir * p.speed * dt : 0;
+    // At a crossing, sometimes turn onto the other road.
+    const nearX = nearestRoadX(city, p.x).dist < 10;
+    const nearY = nearestRoadY(city, p.y).dist < 10;
+    if (nearX && nearY && rng.chance(0.02)) {
+      if (p.axis === 'h') {
+        p.axis = 'v';
+        p.dir = rng.chance(0.5) ? 1 : -1;
+        p.x = nearestRoadX(city, p.x).value + (rng.chance(0.5) ? SIDEWALK : -SIDEWALK);
       } else {
-        // Walk along a sidewalk: pick a road, walk parallel to it.
-        const rp = nearestRoadPoint(city, p.x, p.y);
-        const alongRoad = Math.abs(rp.x - p.x) < Math.abs(rp.y - p.y);
-        const dir = chance(rng, 0.5) ? 1 : -1;
-        p.dirX = alongRoad ? dir : 0;
-        p.dirY = alongRoad ? 0 : dir;
-        p.speed = range(rng, 35, 70);
+        p.axis = 'h';
+        p.dir = rng.chance(0.5) ? 1 : -1;
+        p.y = nearestRoadY(city, p.y).value + (rng.chance(0.5) ? SIDEWALK : -SIDEWALK);
       }
     }
-    const nx = p.x + p.dirX * p.speed * dt;
-    const ny = p.y + p.dirY * p.speed * dt;
-    if (!isBlocked(city, nx, ny) && nx > 30 && nx < CFG.worldW - 30 && ny > 30 && ny < CFG.worldH - 30) {
-      p.x = nx; p.y = ny;
-    } else {
-      p.dirX = -p.dirX; p.dirY = -p.dirY;
-    }
-    if (p.hp !== undefined && p.hp <= 0) p.dead = true;
-  }
-  world.peds = world.peds.filter((p) => !p.dead);
-  // Keep the streets populated.
-  while (world.peds.length < 26) {
-    const rp = nearestRoadPoint(city, 200 + rng() * (CFG.worldW - 400), 200 + rng() * (CFG.worldH - 400));
-    world.peds.push({
-      x: rp.x + range(rng, -40, 40), y: rp.y + range(rng, -40, 40),
-      dirX: 0, dirY: 0, speed: 0, think: 0, hp: 100,
-      color: pick(rng, ['#e8e0d0', '#c96a5a', '#5a7ac9', '#e8c85a', '#7ac95a', '#c95aa0']),
-    });
+    if (rng.chance(0.0015)) p.pause = rng.range(0.5, 2.5);
+    if (p.x < 24) { p.x = 24; p.dir = 1; }
+    if (p.x > CFG.WORLD_W - 24) { p.x = CFG.WORLD_W - 24; p.dir = -1; }
+    if (p.y < 24) { p.y = 24; p.dir = 1; }
+    if (p.y > CFG.WORLD_H - 24) { p.y = CFG.WORLD_H - 24; p.dir = -1; }
   }
 }

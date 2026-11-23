@@ -1,95 +1,147 @@
-// SBPD dispatch: patrol cars that chase and ram, roadblocks at wanted 3+,
-// and a police helicopter with a spotlight at wanted 4–5.
+// SBPD dispatch. Wanted stars decide how many units chase the player, which
+// roles they take, when roadblocks go up and when the police helicopter with
+// its spotlight joins. Police cars drive the road grid and pick the turn at
+// each crossing that closes the distance to the player.
 import { CFG } from './config.js';
-import { nearestRoadPoint, isBlocked } from './city.js';
-import { sfx } from './audio.js';
+import { nearestRoadX, nearestRoadY, randomRoadPoint } from './city.js';
+import { districtAt } from './districts.js';
 
-export const DISPATCH_ROLES = ['Intercept', 'Roadblock', 'Flanking', 'Spotlight', 'Closing In'];
+const ROLES = ['Intercept', 'Flanking', 'Closing In', 'Roadblock', 'Spotlight', 'Pursuit', 'Backup'];
 
-export function updatePolice(world, dt) {
-  const { rng } = world;
-  const want = world.wanted;
-  // Desired number of ground units scales with the wanted level.
-  const wantUnits = want === 0 ? 0 : Math.min(2 + want, 7);
-  while (world.police.length < wantUnits) {
-    const a = rng() * Math.PI * 2;
-    const d = 500 + rng() * 400;
-    const x = world.player.x + Math.cos(a) * d;
-    const y = world.player.y + Math.sin(a) * d;
-    const rp = nearestRoadPoint(world.city, Math.max(80, Math.min(CFG.worldW - 80, x)), Math.max(80, Math.min(CFG.worldH - 80, y)));
-    world.police.push({
-      x: rp.x, y: rp.y, angle: 0, speed: 0, hp: 100,
-      role: DISPATCH_ROLES[world.police.length % DISPATCH_ROLES.length],
-      flee: false, siren: rng(),
-    });
+export function createPolice() {
+  return {
+    units: [],
+    roadblocks: [],
+    heli: null,
+    nextId: 11,
+    spawnTimer: 0,
+  };
+}
+
+function unitName(police) {
+  const id = police.nextId;
+  police.nextId += 1;
+  return `SBPD-${id}`;
+}
+
+function spawnUnit(police, city, rng, player) {
+  const spot = randomRoadPoint(city, rng, player, 420);
+  const role = ROLES[police.units.length % ROLES.length];
+  police.units.push({
+    kind: 'police',
+    name: unitName(police),
+    role,
+    x: spot.x,
+    y: spot.y,
+    angle: 0,
+    speed: 0,
+    topSpeed: 330,
+    color: CFG.PALETTE.police,
+    condition: 100,
+    owned: false,
+    driver: false,
+    w: 34,
+    h: 17,
+  });
+}
+
+function steerToward(unit, tx, ty) {
+  const want = Math.atan2(ty - unit.y, tx - unit.x);
+  let diff = want - unit.angle;
+  while (diff > Math.PI) diff -= 2 * Math.PI;
+  while (diff < -Math.PI) diff += 2 * Math.PI;
+  const step = 3.2 * CFG.DT;
+  unit.angle += Math.max(-step, Math.min(step, diff));
+}
+
+export function stepPolice(police, city, rng, player, dt, wanted) {
+  const wantUnits = Math.min(wanted + 1, 7);
+  police.spawnTimer -= dt;
+  if (police.units.length < wantUnits && police.spawnTimer <= 0) {
+    spawnUnit(police, city, rng, player);
+    police.spawnTimer = 1.2;
   }
-  while (world.police.length > wantUnits) world.police.pop();
+  // Extra units leave when the heat drops.
+  while (police.units.length > wantUnits) police.units.pop();
 
-  const px = world.player.x;
-  const py = world.player.y;
-  for (const cop of world.police) {
-    if (cop.flee) {
-      const a = Math.atan2(cop.y - py, cop.x - px);
-      cop.x += Math.cos(a) * 300 * dt;
-      cop.y += Math.sin(a) * 300 * dt;
-      cop.angle = a;
-      continue;
+  for (const unit of police.units) {
+    // Chase on the grid: head straight at the player, snapped to roads.
+    const nx = nearestRoadX(city, unit.x);
+    const ny = nearestRoadY(city, unit.y);
+    const onH = ny.dist <= CFG.ROAD_W / 2;
+    const onV = nx.dist <= CFG.ROAD_W / 2;
+    if (onH && !onV) unit.y = ny.value;
+    if (onV && !onH) unit.x = nx.value;
+    const dist = Math.hypot(player.x - unit.x, player.y - unit.y);
+    if (dist > 46) {
+      steerToward(unit, player.x, player.y);
+      unit.speed = Math.min(unit.topSpeed, unit.speed + 420 * dt);
+    } else {
+      // Ramming speed: bump the player, then back off a little.
+      unit.speed = Math.max(60, unit.speed - 300 * dt);
     }
-    // Chase: steer toward the player, ramming when close.
-    const targetAngle = Math.atan2(py - cop.y, px - cop.x);
-    let diff = targetAngle - cop.angle;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    cop.angle += Math.max(-3.2 * dt, Math.min(3.2 * dt, diff));
-    const dist = Math.hypot(px - cop.x, py - cop.y);
-    const speed = want >= 4 ? 520 : want >= 2 ? 460 : 380;
-    cop.speed = dist < 60 ? speed * 0.4 : speed;
-    const nx = cop.x + Math.cos(cop.angle) * cop.speed * dt;
-    const ny = cop.y + Math.sin(cop.angle) * cop.speed * dt;
-    if (!isBlocked(world.city, nx, ny)) { cop.x = nx; cop.y = ny; }
-    // Ram damage when touching the player.
-    if (dist < 46 && world.player.car) {
-      world.player.car.health = Math.max(0, world.player.car.health - 14 * dt);
-      if (rng() < dt * 2) sfx('crash');
-    }
-    if (dist < 30 && !world.player.car && !world.player.heli) {
-      world.player.hp -= 20 * dt;
-    }
+    unit.x += Math.cos(unit.angle) * unit.speed * dt;
+    unit.y += Math.sin(unit.angle) * unit.speed * dt;
+    unit.dist = Math.round(dist / 10);
   }
 
-  // Roadblock: two parked cruisers across the road ahead of the player.
-  world.roadblock = want >= 3;
-  if (world.roadblock) {
-    const ahead = 320;
-    const a = world.player.car ? world.player.car.angle : world.player.angle;
-    const bx = px + Math.cos(a) * ahead;
-    const by = py + Math.sin(a) * ahead;
-    const rp = nearestRoadPoint(world.city, bx, by);
-    world.roadblockAt = { x: rp.x, y: rp.y, angle: a + Math.PI / 2 };
+  // Roadblocks at wanted 3 and up: two stopped cruisers across the road the
+  // player is heading down, a few hundred metres ahead.
+  if (wanted >= 3) {
+    if (police.roadblocks.length === 0) {
+      const aheadX = player.x + Math.cos(player.angle) * 320;
+      const aheadY = player.y + Math.sin(player.angle) * 320;
+      const nx = nearestRoadX(city, aheadX);
+      const ny = nearestRoadY(city, aheadY);
+      const horizontal = Math.abs(Math.cos(player.angle)) > Math.abs(Math.sin(player.angle));
+      const bx = horizontal ? aheadX : nx.value;
+      const by = horizontal ? ny.value : aheadY;
+      for (let i = -1; i <= 1; i += 1) {
+        police.roadblocks.push({
+          kind: 'roadblock',
+          x: horizontal ? bx : bx + i * 30,
+          y: horizontal ? by + i * 30 : by,
+          angle: horizontal ? Math.PI / 2 : 0,
+          speed: 0,
+          color: CFG.PALETTE.police,
+          w: 34,
+          h: 17,
+        });
+      }
+    }
   } else {
-    world.roadblockAt = null;
+    police.roadblocks.length = 0;
   }
 
-  // Police helicopter with spotlight at wanted 4–5.
-  if (want >= 4) {
-    if (!world.policeHeli.active) {
-      world.policeHeli.active = true;
-      world.policeHeli.x = px; world.policeHeli.y = py - 200;
-      sfx('siren');
+  // Helicopter with a spotlight at wanted 4 and 5.
+  if (wanted >= 4) {
+    if (!police.heli) {
+      police.heli = { x: player.x - 160, y: player.y - 160, angle: 0, rotor: 0 };
     }
-    const h = world.policeHeli;
-    h.x += (px - h.x) * Math.min(1, dt * 1.2);
-    h.y += (py - h.y) * Math.min(1, dt * 1.2);
-    h.angle += dt * 0.8;
-    h.spotX = px; h.spotY = py;
+    const heli = police.heli;
+    heli.rotor += dt * 22;
+    const tx = player.x + Math.cos(heli.angle) * 130;
+    const ty = player.y + Math.sin(heli.angle) * 130;
+    heli.angle += dt * 0.55;
+    heli.x += (tx - heli.x) * Math.min(1, dt * 1.4);
+    heli.y += (ty - heli.y) * Math.min(1, dt * 1.4);
   } else {
-    world.policeHeli.active = false;
+    police.heli = null;
   }
 }
 
-// One-line dispatch summary for the HUD.
-export function dispatchSummary(world) {
-  const units = world.police.map((p) => p.role);
-  const dists = world.police.map((p) => Math.round(Math.hypot(p.x - world.player.x, p.y - world.player.y)));
-  return { count: world.police.length, roles: units, dists };
+// Rows for the dispatch HUD panel.
+export function dispatchRows(police) {
+  const rows = police.units.map((u) => ({
+    name: u.name,
+    role: u.role,
+    dist: u.dist || 0,
+  }));
+  rows.sort((a, b) => a.dist - b.dist);
+  return rows;
+}
+
+export function districtStandingNote(x, y) {
+  const d = districtAt(x, y);
+  return d;
 }

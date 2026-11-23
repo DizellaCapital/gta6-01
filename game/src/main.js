@@ -1,184 +1,103 @@
-// Solmar Bay boot: URL params, fixed-timestep loop, screen state machine,
-// input wiring, staging screenshots, save/load.
+// Solmar Bay — boot, fixed-timestep loop, screen state machine and the
+// screenshot staging hook (?shot=start|play|chase|end&seed=1).
 import { CFG } from './config.js';
-import { createWorld, stepWorld, saveGame, loadGame, applySave } from './world.js';
-import { createInput, bindInput, consumePress, clearPresses } from './input.js';
-import { drawWorld, drawHUD, drawTitle, drawPause, drawGameOver } from './render.js';
-import { stageScene, runStaging } from './shots.js';
-import { nextStation } from './radio.js';
-import { switchWeapon } from './combat.js';
-import { callCrew } from './crew.js';
-import { unlockAudio, setMuted, isMuted, startRadio } from './audio.js';
+import { createWorld, stepWorld, resetWorld, loadSave, saveGame } from './world.js';
+import { createInput } from './input.js';
+import { render } from './render.js';
+import { stageScene } from './shots.js';
+import { unlockAudio, sfxClick } from './audio.js';
 
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
 const statusEl = document.getElementById('status');
+const ctx = canvas.getContext('2d');
 
 const params = new URLSearchParams(window.location.search);
-const seed = parseInt(params.get('seed') || '1', 10) || 1;
+const seed = Number.parseInt(params.get('seed') || '1', 10) || 1;
 const shot = params.get('shot');
 
-let world = createWorld(seed);
-let screen = 'title';
+const world = createWorld(seed);
 const input = createInput();
-bindInput(input, canvas);
+input.attach(canvas);
+loadSave(world);
 
-const save = loadGame();
-if (save) applySave(world, save);
-
-let cam = { x: world.player.x, y: world.player.y };
-let viewW = window.innerWidth;
-let viewH = window.innerHeight;
-let dpr = 1;
+let view = { w: window.innerWidth, h: window.innerHeight };
 
 function resize() {
-  dpr = Math.min(2, window.devicePixelRatio || 1);
-  viewW = window.innerWidth;
-  viewH = window.innerHeight;
-  canvas.width = Math.round(viewW * dpr);
-  canvas.height = Math.round(viewH * dpr);
-  canvas.style.width = `${viewW}px`;
-  canvas.style.height = `${viewH}px`;
+  const dpr = window.devicePixelRatio || 1;
+  view = { w: window.innerWidth, h: window.innerHeight };
+  canvas.width = Math.round(view.w * dpr);
+  canvas.height = Math.round(view.h * dpr);
+  canvas.style.width = `${view.w}px`;
+  canvas.style.height = `${view.h}px`;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  input.centerX = view.w / 2;
+  input.centerY = view.h / 2;
 }
 window.addEventListener('resize', resize);
 resize();
 
-function updateCamera(dt) {
-  const tx = world.player.x;
-  const ty = world.player.y;
-  cam.x += (tx - cam.x) * Math.min(1, dt * 5);
-  cam.y += (ty - cam.y) * Math.min(1, dt * 5);
-  cam.x = Math.max(viewW / 2 - 200, Math.min(CFG.worldW - viewW / 2 + 200, cam.x));
-  cam.y = Math.max(viewH / 2 - 200, Math.min(CFG.worldH - viewH / 2 + 200, cam.y));
+function setStatus(text) {
+  if (statusEl) statusEl.textContent = text;
+  document.title = `Solmar Bay — ${text}`;
 }
 
-function renderFrame() {
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, viewW, viewH);
-  drawWorld(ctx, world, cam, viewW, viewH);
-  if (screen === 'playing' || screen === 'paused') drawHUD(ctx, world, viewW, viewH);
-  if (screen === 'title') drawTitle(ctx, world, viewW, viewH, save);
-  if (screen === 'paused') drawPause(ctx, viewW, viewH);
-  if (screen === 'over') {
-    drawHUD(ctx, world, viewW, viewH);
-    drawGameOver(ctx, world, viewW, viewH);
-  }
-  if (statusEl) {
-    statusEl.textContent = screen === 'title'
-      ? 'Solmar Bay — press Enter to play'
-      : `Solmar Bay — $${world.money} — wanted ${world.wanted}`;
-  }
-}
+window.addEventListener('keydown', () => unlockAudio(world.audio), { once: false });
+canvas.addEventListener('mousedown', () => unlockAudio(world.audio));
 
-// --- staging for screenshots: runs synchronously before first paint ---
-let shotDone = false;
 if (shot) {
-  const scene = stageScene(world, shot);
-  if (shot === 'start') {
-    const idle = { up: false, down: false, left: false, right: false, action: false, shoot: false, brake: false, pressed: {} };
-    const steps = Math.round(scene.seconds / CFG.step);
-    for (let i = 0; i < steps; i++) stepWorld(world, idle, CFG.step);
-  } else {
-    runStaging(world, stepWorld, scene.seconds);
-  }
-  if (scene.setup) {
-    scene.setup();
-    const idle = { up: false, down: false, left: false, right: false, action: false, shoot: false, brake: false, pressed: {} };
-    for (let i = 0; i < Math.round(2 / CFG.step); i++) stepWorld(world, idle, CFG.step);
-  }
-  screen = world.over ? 'over' : scene.screen;
-  cam.x = world.player.x;
-  cam.y = world.player.y;
-  renderFrame();
-  shotDone = true;
+  // Staging mode: run the real simulation, render one frame, stop.
+  stageScene(world, shot);
+  render(ctx, world, view);
+  setStatus(`Solmar Bay — ${shot} scene staged (seed ${seed})`);
   window.__shotReady = true;
-}
-
-function startPlaying() {
-  unlockAudio();
-  startRadio(world.radio.station);
-  screen = 'playing';
-  statusEl.textContent = 'Solmar Bay — playing';
-}
-
-function restart() {
-  world = createWorld(seed);
-  const s = loadGame();
-  if (s) applySave(world, s);
-  cam.x = world.player.x;
-  cam.y = world.player.y;
-  screen = 'playing';
-}
-
-let last = performance.now();
-let acc = 0;
-let saveTimer = 0;
-
-function frame(now) {
+  window.__world = world;
+} else {
+  let last = performance.now();
+  let acc = 0;
+  function frame(now) {
+    const elapsed = Math.min(0.25, (now - last) / 1000);
+    last = now;
+    acc += elapsed;
+    let steps = 0;
+    if (world.screen === 'title') {
+      if (input.wasPressed('Enter')) {
+        world.screen = 'play';
+        unlockAudio(world.audio);
+        sfxClick(world.audio);
+        world.showDialog('Mara Voss', world.missions[0].intro, 7);
+        setStatus('Solmar Bay — playing');
+      }
+    } else if (world.screen === 'pause') {
+      if (input.wasPressed('Escape') || input.wasPressed('KeyP')) {
+        world.screen = 'play';
+      }
+    } else if (world.screen === 'end') {
+      if (input.wasPressed('Enter')) {
+        resetWorld(world);
+        setStatus('Solmar Bay — playing');
+      }
+    }
+    while (acc >= CFG.DT && steps < 5) {
+      if (world.screen === 'play' || world.screen === 'title') {
+        stepWorld(world, input, CFG.DT);
+      }
+      input.endStep();
+      acc -= CFG.DT;
+      steps += 1;
+    }
+    if (steps === 5) acc = 0;
+    if (world.screen === 'title') setStatus('Solmar Bay — title screen. Press Enter to start.');
+    if (world.screen === 'pause') setStatus('Solmar Bay — paused. Press Esc to resume.');
+    if (world.screen === 'end') setStatus(`Solmar Bay — ${world.endReason === 'busted' ? 'busted' : 'wasted'}. Press Enter to play again.`);
+    render(ctx, world, view);
+    requestAnimationFrame(frame);
+  }
+  setStatus('Solmar Bay — title screen. Press Enter to start.');
+  window.__world = world;
   requestAnimationFrame(frame);
-  let dt = (now - last) / 1000;
-  last = now;
-  if (dt > 0.25) dt = 0.25;
-
-  // Global keys.
-  if (consumePress(input, 'Enter')) {
-    if (screen === 'title') startPlaying();
-    else if (screen === 'over') restart();
-  }
-  if (consumePress(input, 'KeyP') || consumePress(input, 'Escape')) {
-    if (screen === 'playing') { screen = 'paused'; saveGame(world); }
-    else if (screen === 'paused') screen = 'playing';
-  }
-  if (consumePress(input, 'KeyM')) setMuted(!isMuted());
-  if (screen === 'playing') {
-    if (consumePress(input, 'KeyQ')) {
-      nextStation(world.radio);
-      startRadio(world.radio.station);
-    }
-    if (consumePress(input, 'Digit1')) callCrew(world, world.crew, 0);
-    if (consumePress(input, 'Digit2')) callCrew(world, world.crew, 1);
-    if (consumePress(input, 'Digit3')) callCrew(world, world.crew, 2);
-  }
-
-  if (screen === 'playing' && !shotDone) {
-    // Aim from the mouse position in world space.
-    const wx = input.mouseX + cam.x - viewW / 2;
-    const wy = input.mouseY + cam.y - viewH / 2;
-    world.aimAngle = Math.atan2(wy - world.player.y, wx - world.player.x);
-    acc += dt;
-    const step = CFG.step;
-    let n = 0;
-    while (acc >= step && n < 5) {
-      stepWorld(world, input, step);
-      acc -= step;
-      n++;
-    }
-    if (world.over) screen = 'over';
-    saveTimer += dt;
-    if (saveTimer > 10) { saveTimer = 0; saveGame(world); }
-    clearPresses(input);
-  } else if (screen === 'title') {
-    // Living city behind the title: traffic and peds keep moving.
-    const idle = { up: false, down: false, left: false, right: false, action: false, shoot: false, brake: false, pressed: {} };
-    acc += dt;
-    let n = 0;
-    while (acc >= CFG.step && n < 5) {
-      stepWorld(world, idle, CFG.step);
-      acc -= CFG.step;
-      n++;
-    }
-    cam.x = CFG.worldW / 2 + Math.sin(now / 9000) * 500;
-    cam.y = CFG.worldH / 2 + Math.cos(now / 12000) * 300;
-    clearPresses(input);
-  } else {
-    clearPresses(input);
-  }
-
-  if (!shotDone) {
-    updateCamera(dt);
-    renderFrame();
-  }
 }
-requestAnimationFrame(frame);
 
-window.__game = { get world() { return world; }, get screen() { return screen; } };
+// Save when the tab closes mid-game.
+window.addEventListener('beforeunload', () => {
+  if (world.screen === 'play') saveGame(world);
+});

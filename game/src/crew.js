@@ -1,56 +1,73 @@
-// Rico's three-person crew. Each member has one ability on a cooldown,
-// called with keys 1 / 2 / 3.
-export const CREW = [
-  { name: 'Jax', role: 'Driver', ability: 'Getaway Car', desc: 'Brings a fast car to you', cooldown: 45 },
-  { name: 'Lena', role: 'Hacker', ability: 'Ghost Signal', desc: 'Drops one wanted star', cooldown: 60 },
-  { name: 'Marco', role: 'Muscle', ability: 'Clear The Street', desc: 'Scares off nearby cops', cooldown: 75 },
-];
-
-export function createCrewState() {
-  return { readyAt: [0, 0, 0] };
+// The crew. Three specialists Rico can call on with keys 1-3. Each ability
+// has a cooldown, and the HUD shows who is ready and who is recharging.
+export function createCrew() {
+  return {
+    members: [
+      {
+        name: 'Jax',
+        role: 'Mechanic',
+        ability: 'Full repair',
+        key: 'Digit1',
+        cooldown: 40,
+        cd: 0,
+      },
+      {
+        name: 'Lena',
+        role: 'Hacker',
+        ability: 'Drop 1 star',
+        key: 'Digit2',
+        cooldown: 55,
+        cd: 0,
+      },
+      {
+        name: 'Marco',
+        role: 'Driver',
+        ability: 'Getaway car',
+        key: 'Digit3',
+        cooldown: 70,
+        cd: 0,
+      },
+    ],
+  };
 }
 
-export function crewReadyAt(state, i, now) {
-  return state.readyAt[i] <= now;
-}
-
-export function crewCooldownLeft(state, i, now) {
-  return Math.max(0, state.readyAt[i] - now);
-}
-
-// Runs the ability; returns a message line, or null when still cooling down.
-export function callCrew(world, state, i) {
-  if (!crewReadyAt(state, i, world.time)) return null;
-  state.readyAt[i] = world.time + CREW[i].cooldown;
-  if (i === 0) {
-    // Jax delivers a tuned car right next to Rico.
-    const a = world.player.angle + Math.PI / 2;
-    const car = spawnCrewCar(world, world.player.x + Math.cos(a) * 90, world.player.y + Math.sin(a) * 90);
-    world.message = `Jax: getaway car parked beside you.`;
-    return car;
+export function stepCrew(crew, dt) {
+  for (const m of crew.members) {
+    if (m.cd > 0) m.cd -= dt;
   }
-  if (i === 1) {
-    world.wanted = Math.max(0, world.wanted - 1);
-    world.message = `Lena: cameras looped, one star down.`;
-    return true;
-  }
-  // Marco clears the street.
-  let cleared = 0;
-  for (const p of world.police) {
-    const d = Math.hypot(p.x - world.player.x, p.y - world.player.y);
-    if (d < 700) { p.flee = true; cleared++; }
-  }
-  world.message = `Marco: ${cleared} cop${cleared === 1 ? '' : 's'} backing off.`;
-  return cleared;
 }
 
-import { makeCar } from './world.js';
-
-function spawnCrewCar(world, x, y) {
-  const car = makeCar(world, x, y, '#e8b73a', false);
-  car.tuned = true;
-  car.name = 'Comet GT';
-  car.health = 100;
-  world.cars.push(car);
-  return car;
+// Apply a crew member's ability. Returns a message for the feed, or null
+// when the member is still on cooldown.
+export function useCrew(crew, index, world) {
+  const m = crew.members[index];
+  if (!m || m.cd > 0) return null;
+  m.cd = m.cooldown;
+  const player = world.player;
+  if (m.name === 'Jax') {
+    if (player.car) player.car.condition = 100;
+    return 'Jax patched the car up — condition 100%.';
+  }
+  if (m.name === 'Lena') {
+    if (player.wanted > 0) player.wanted -= 1;
+    return 'Lena spoofed the dispatch — one star down.';
+  }
+  // Marco: park a fresh getaway car next to the player on the nearest road.
+  const spot = world.nearestRoadSpot(player.x, player.y);
+  world.cars.push({
+    kind: 'parked',
+    x: spot.x,
+    y: spot.y,
+    angle: 0,
+    speed: 0,
+    topSpeed: 380,
+    color: '#e8b13c',
+    name: 'Getaway Coupe',
+    condition: 100,
+    owned: true,
+    driver: false,
+    w: 34,
+    h: 17,
+  });
+  return 'Marco dropped a getaway car nearby.';
 }
